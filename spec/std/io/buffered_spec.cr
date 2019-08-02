@@ -49,7 +49,28 @@ private class BufferedWrapper < IO
   end
 end
 
+DEFAULT_BUFFER_SIZE = BufferedWrapper.new(IO::Memory.new("")).buffer_size
+
 describe "IO::Buffered" do
+  it "can report buffer_size" do
+    io = BufferedWrapper.new(IO::Memory.new(""))
+    io.buffer_size.should eq(DEFAULT_BUFFER_SIZE)
+  end
+
+  it "can set buffer_size" do
+    io = BufferedWrapper.new(IO::Memory.new(""))
+    io.buffer_size = 16_384
+    io.buffer_size.should eq(16_384)
+  end
+
+  it "can not set buffer_size after first use" do
+    io = BufferedWrapper.new(IO::Memory.new("hello\r\nworld\n"))
+    io.gets
+    expect_raises ArgumentError, "buffer_size" do
+      io.buffer_size = 16_384
+    end
+  end
+
   it "does gets" do
     io = BufferedWrapper.new(IO::Memory.new("hello\r\nworld\n"))
     io.gets.should eq("hello")
@@ -121,14 +142,14 @@ describe "IO::Buffered" do
   end
 
   it "does gets with char and limit when not found in buffer" do
-    io = BufferedWrapper.new(IO::Memory.new(("a" * (IO::Buffered::BUFFER_SIZE + 10)) + "b"))
+    io = BufferedWrapper.new(IO::Memory.new(("a" * (DEFAULT_BUFFER_SIZE + 10)) + "b"))
     io.gets('b', 2).should eq("aa")
   end
 
   it "does gets with char and limit when not found in buffer (2)" do
-    base = "a" * (IO::Buffered::BUFFER_SIZE + 10)
+    base = "a" * (DEFAULT_BUFFER_SIZE + 10)
     io = BufferedWrapper.new(IO::Memory.new(base + "aabaaa"))
-    io.gets('b', IO::Buffered::BUFFER_SIZE + 11).should eq(base + "a")
+    io.gets('b', DEFAULT_BUFFER_SIZE + 11).should eq(base + "a")
   end
 
   it "raises if invoking gets with negative limit" do
@@ -262,41 +283,103 @@ describe "IO::Buffered" do
     str.to_s.should eq("hello" * 10_000)
   end
 
-  it "flushes on \n" do
-    str = IO::Memory.new
-    io = BufferedWrapper.new(str)
-    io.flush_on_newline = true
+  describe "sync" do
+    it "syncs (write)" do
+      str = IO::Memory.new
 
-    io << "hello\nworld"
-    str.to_s.should eq("hello\n")
-    io.flush
-    str.to_s.should eq("hello\nworld")
+      io = BufferedWrapper.new(str)
+      io.sync?.should be_false
+
+      io.sync = true
+      io.sync?.should be_true
+
+      io.write_byte 1_u8
+
+      str.rewind
+      str.read_byte.should eq(1_u8)
+    end
   end
 
-  it "doesn't write past count" do
-    str = IO::Memory.new
-    io = BufferedWrapper.new(str)
-    io.flush_on_newline = true
+  describe "read_buffering" do
+    it "works with IO#read" do
+      str = IO::Memory.new "abc"
 
-    slice = Slice.new(10) { |i| i == 9 ? '\n'.ord.to_u8 : ('a'.ord + i).to_u8 }
-    io.write slice[0, 4]
-    io.flush
-    str.to_s.should eq("abcd")
-  end
+      io = BufferedWrapper.new(str)
+      io.read_buffering?.should be_true
 
-  it "syncs" do
-    str = IO::Memory.new
+      io.read_buffering = false
+      io.read_buffering?.should be_false
 
-    io = BufferedWrapper.new(str)
-    io.sync?.should be_false
+      byte = Bytes.new(1)
+      io.read_fully(byte)
+      byte[0].should eq('a'.ord.to_u8)
 
-    io.sync = true
-    io.sync?.should be_true
+      str.gets_to_end.should eq("bc")
+    end
 
-    io.write_byte 1_u8
+    it "works with IO#read (already buffered)" do
+      str = IO::Memory.new
+      str << "a" * DEFAULT_BUFFER_SIZE
+      str.pos = 0
 
-    str.rewind
-    str.read_byte.should eq(1_u8)
+      io = BufferedWrapper.new(str)
+      io.read_buffering?.should be_true
+
+      io.buffer_size.times do
+        byte = Bytes.new(1)
+        io.read_fully(byte)
+        byte[0].should eq('a'.ord.to_u8)
+      end
+
+      io.read_buffering = false
+      io.read_buffering?.should be_false
+
+      str << "bcde"
+      str.pos -= 4
+
+      byte = Bytes.new(1)
+      io.read_fully(byte)
+      byte[0].should eq('b'.ord.to_u8)
+
+      str.gets_to_end.should eq("cde")
+    end
+
+    it "works with IO#read_byte" do
+      str = IO::Memory.new "abc"
+
+      io = BufferedWrapper.new(str)
+      io.read_buffering?.should be_true
+
+      io.read_buffering = false
+      io.read_buffering?.should be_false
+
+      io.read_byte.should eq('a'.ord.to_u8)
+
+      str.gets_to_end.should eq("bc")
+    end
+
+    it "works with IO#read_byte (already buffered)" do
+      str = IO::Memory.new
+      str << "a" * DEFAULT_BUFFER_SIZE
+      str.pos = 0
+
+      io = BufferedWrapper.new(str)
+      io.read_buffering?.should be_true
+
+      io.buffer_size.times do
+        io.read_byte.should eq('a'.ord.to_u8)
+      end
+
+      io.read_buffering = false
+      io.read_buffering?.should be_false
+
+      str << "bcde"
+      str.pos -= 4
+
+      io.read_byte.should eq('b'.ord.to_u8)
+
+      str.gets_to_end.should eq("cde")
+    end
   end
 
   it "shouldn't call unbuffered read if reading to an empty slice" do

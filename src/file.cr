@@ -1,22 +1,74 @@
 require "crystal/system/file"
 
+# A `File` instance represents a file entry in the local file system and allows using it as an `IO`.
+#
+# ```
+# file = File.new("path/to/file")
+# content = file.gets_to_end
+# file.close
+#
+# # Implicit close with `open`
+# content = File.open("path/to/file") do |file|
+#   file.gets_to_end
+# end
+#
+# # Shortcut:
+# content = File.read("path/to/file")
+# ```
+#
+# ## Temporary Files
+#
+# Every tempfile is operated as a `File`, including initializing, reading and writing.
+#
+# ```
+# tempfile = File.tempfile("foo")
+#
+# File.size(tempfile.path)                   # => 6
+# File.info(tempfile.path).modification_time # => 2015-10-20 13:11:12 UTC
+# File.exists?(tempfile.path)                # => true
+# File.read_lines(tempfile.path)             # => ["foobar"]
+# ```
+#
+# Files created from `tempfile` are stored in a directory that handles
+# temporary files (`Dir.tempdir`):
+#
+# ```
+# File.tempfile("foo").path # => "/tmp/foo.ulBCPS"
+# ```
+#
+# It is encouraged to delete a tempfile after using it, which
+# ensures they are not left behind in your filesystem until garbage collected.
+#
+# ```
+# tempfile = File.tempfile("foo")
+# tempfile.delete
+# ```
 class File < IO::FileDescriptor
-  # The file/directory separator character. `'/'` in Unix, `'\\'` in Windows.
-  SEPARATOR = {% if flag?(:windows) %}
-    '\\'
-  {% else %}
-    '/'
-  {% end %}
+  # The file/directory separator character. `'/'` on all platforms.
+  SEPARATOR = '/'
 
-  # The file/directory separator string. `"/"` in Unix, `"\\"` in Windows.
-  SEPARATOR_STRING = {% if flag?(:windows) %}
-    "\\"
-  {% else %}
-    "/"
-  {% end %}
+  # The file/directory separator string. `"/"` on all platforms.
+  SEPARATOR_STRING = "/"
 
   # :nodoc:
-  DEFAULT_CREATE_MODE = LibC::S_IRUSR | LibC::S_IWUSR | LibC::S_IRGRP | LibC::S_IROTH
+  DEFAULT_CREATE_PERMISSIONS = File::Permissions.new(0o644)
+
+  # The name of the null device on the host platform. `/dev/null` on UNIX and `NUL`
+  # on win32.
+  #
+  # When this device is opened using `File.open`, read operations will always
+  # return EOF, and any data written will be immediately discarded.
+  #
+  # ```
+  # File.open(File::NULL, "w") do |file|
+  #   file.puts "this is discarded"
+  # end
+  # ```
+  NULL = {% if flag?(:win32) %}
+           "NUL"
+         {% else %}
+           "/dev/null"
+         {% end %}
 
   include Crystal::System::File
 
@@ -27,67 +79,69 @@ class File < IO::FileDescriptor
     super(fd, blocking)
   end
 
-  def self.new(filename : String, mode = "r", perm = DEFAULT_CREATE_MODE, encoding = nil, invalid = nil)
+  # Opens the file named by *filename*.
+  #
+  # *mode* must be one of the following file open modes:
+  # ```text
+  # Mode | Description
+  # -----+------------------------------------------------------
+  # r    | Read-only, starts at the beginning of the file.
+  # r+   | Read-write, starts at the beginning of the file.
+  # w    | Write-only, truncates existing file to zero length or
+  #      | creates a new file if the file doesn't exists.
+  # w+   | Read-write, truncates existing file to zero length or
+  #      | creates a new file if the file doesn't exists.
+  # a    | Write-only, starts at the end of the file,
+  #      | creates a new file if the file doesn't exists.
+  # a+   | Read-write, starts at the end of the file,
+  #      | creates a new file if the file doesn't exists.
+  # rb   | Same as the 'r' mode but in binary file mode.
+  # wb   | Same as the 'w' mode but in binary file mode.
+  # ab   | Same as the 'a' mode but in binary file mode.
+  # ```
+  # In binary file mode, line endings are not converted to CRLF on Windows.
+  def self.new(filename : Path | String, mode = "r", perm = DEFAULT_CREATE_PERMISSIONS, encoding = nil, invalid = nil)
+    filename = filename.to_s
     fd = Crystal::System::File.open(filename, mode, perm)
     new(filename, fd, blocking: true, encoding: encoding, invalid: invalid)
   end
 
   getter path : String
 
-  # Returns a `File::Stat` object for the file given by *path* or returns `nil`
-  # if the file does not exist. Raises `Errno` in case of an error. In case of
-  # a symbolic link it is followed and information about the target is returned.
+  # Returns a `File::Info` object for the file given by *path* or returns `nil`
+  # if the file does not exist.
+  #
+  # If *follow_symlinks* is set (the default), symbolic links are followed. Otherwise,
+  # symbolic links return information on the symlink itself.
   #
   # ```
   # File.write("foo", "foo")
-  # File.stat?("foo").try(&.size) # => 3
-  # File.stat?("non_existent")    # => nil
-  # ```
-  def self.stat?(path : String) : Stat?
-    Crystal::System::File.stat?(path)
-  end
-
-  # Returns a `File::Stat` object for the file given by *path* or returns `nil`
-  # if the file does not exist. Raises `Errno` in case of an error. In case of
-  # a symbolic link information about the link itself is returned.
-  #
-  # ```
-  # File.write("foo", "foo")
-  # File.lstat?("foo").try(&.size) # => 3
+  # File.info?("foo").try(&.size) # => 3
+  # File.info?("non_existent")    # => nil
   #
   # File.symlink("foo", "bar")
-  # File.lstat?("bar").try(&.symlink?) # => true
-  #
-  # File.lstat?("non_existent") # => nil
+  # File.info?("bar", follow_symlinks: false).try(&.type.symlink?) # => true
   # ```
-  def self.lstat?(path : String) : Stat?
-    Crystal::System::File.lstat?(path)
+  def self.info?(path : Path | String, follow_symlinks = true) : Info?
+    Crystal::System::File.info?(path.to_s, follow_symlinks)
   end
 
-  # Returns a `File::Stat` object for the file given by *path* or raises
-  # `Errno` in case of an error. In case of a symbolic link
-  # it is followed and information about the target is returned.
+  # Returns a `File::Info` object for the file given by *path* or raises
+  # `Errno` in case of an error.
+  #
+  # If *follow_symlinks* is set (the default), symbolic links are followed. Otherwise,
+  # symbolic links return information on the symlink itself.
   #
   # ```
   # File.write("foo", "foo")
-  # File.stat("foo").size  # => 3
-  # File.stat("foo").mtime # => 2015-09-23 06:24:19 UTC
-  # ```
-  def self.stat(path) : Stat
-    stat?(path) || raise Errno.new("Unable to get stat for #{path.inspect}")
-  end
-
-  # Returns a `File::Stat` object for the file given by *path* or raises
-  # `Errno` in case of an error. In case of a symbolic link
-  # information about the link itself is returned.
+  # File.info("foo").size              # => 3
+  # File.info("foo").modification_time # => 2015-09-23 06:24:19 UTC
   #
+  # File.symlink("foo", "bar")
+  # File.info("bar", follow_symlinks: false).type.symlink? # => true
   # ```
-  # File.write("foo", "foo")
-  # File.lstat("foo").size  # => 3
-  # File.lstat("foo").mtime # => 2015-09-23 06:24:19 UTC
-  # ```
-  def self.lstat(path) : Stat
-    lstat?(path) || raise Errno.new("Unable to get stat for #{path.inspect}")
+  def self.info(path : Path | String, follow_symlinks = true) : Info
+    info?(path, follow_symlinks) || raise Errno.new("Unable to get info for '#{path.inspect_unquoted}''")
   end
 
   # Returns `true` if *path* exists else returns `false`
@@ -98,8 +152,14 @@ class File < IO::FileDescriptor
   # File.write("foo", "foo")
   # File.exists?("foo") # => true
   # ```
-  def self.exists?(path) : Bool
-    Crystal::System::File.exists?(path)
+  def self.exists?(path : Path | String) : Bool
+    Crystal::System::File.exists?(path.to_s)
+  end
+
+  # Returns `true` if *path1* and *path2* represents the same file.
+  # The comparison take symlinks in consideration if *follow_symlinks* is `true`.
+  def self.same?(path1 : String, path2 : String, follow_symlinks = false) : Bool
+    info(path1, follow_symlinks).same_file? info(path2, follow_symlinks)
   end
 
   # Returns the size of *filename* bytes. Raises `Errno` if the file at *path*
@@ -110,10 +170,10 @@ class File < IO::FileDescriptor
   # File.write("foo", "foo")
   # File.size("foo") # => 3
   # ```
-  def self.size(filename) : UInt64
-    stat(filename).size
+  def self.size(filename : Path | String) : UInt64
+    info(filename).size
   rescue ex : Errno
-    raise Errno.new("Error determining size of #{filename.inspect}", ex.errno)
+    raise Errno.new("Error determining size of '#{filename.inspect_unquoted}'", ex.errno)
   end
 
   # Returns `true` if the file at *path* is empty, otherwise returns `false`.
@@ -125,7 +185,7 @@ class File < IO::FileDescriptor
   # File.write("foo", "foo")
   # File.empty?("foo") # => false
   # ```
-  def self.empty?(path) : Bool
+  def self.empty?(path : Path | String) : Bool
     size(path) == 0
   end
 
@@ -135,8 +195,8 @@ class File < IO::FileDescriptor
   # File.write("foo", "foo")
   # File.readable?("foo") # => true
   # ```
-  def self.readable?(path) : Bool
-    Crystal::System::File.readable?(path)
+  def self.readable?(path : Path | String) : Bool
+    Crystal::System::File.readable?(path.to_s)
   end
 
   # Returns `true` if *path* is writable by the real user id of this process else returns `false`.
@@ -145,8 +205,8 @@ class File < IO::FileDescriptor
   # File.write("foo", "foo")
   # File.writable?("foo") # => true
   # ```
-  def self.writable?(path) : Bool
-    Crystal::System::File.writable?(path)
+  def self.writable?(path : Path | String) : Bool
+    Crystal::System::File.writable?(path.to_s)
   end
 
   # Returns `true` if *path* is executable by the real user id of this process else returns `false`.
@@ -155,8 +215,8 @@ class File < IO::FileDescriptor
   # File.write("foo", "foo")
   # File.executable?("foo") # => false
   # ```
-  def self.executable?(path) : Bool
-    Crystal::System::File.executable?(path)
+  def self.executable?(path : Path | String) : Bool
+    Crystal::System::File.executable?(path.to_s)
   end
 
   # Returns `true` if given *path* exists and is a file.
@@ -168,9 +228,9 @@ class File < IO::FileDescriptor
   # File.file?("dir1")   # => false
   # File.file?("foobar") # => false
   # ```
-  def self.file?(path) : Bool
-    if stat = stat?(path)
-      stat.file?
+  def self.file?(path : Path | String) : Bool
+    if info = info?(path)
+      info.type.file?
     else
       false
     end
@@ -185,7 +245,7 @@ class File < IO::FileDescriptor
   # File.directory?("dir2")   # => true
   # File.directory?("foobar") # => false
   # ```
-  def self.directory?(path) : Bool
+  def self.directory?(path : Path | String) : Bool
     Dir.exists?(path)
   end
 
@@ -195,17 +255,7 @@ class File < IO::FileDescriptor
   # File.dirname("/foo/bar/file.cr") # => "/foo/bar"
   # ```
   def self.dirname(path) : String
-    path.check_no_null_byte
-    index = path.rindex SEPARATOR
-    if index
-      if index == 0
-        SEPARATOR_STRING
-      else
-        path[0, index]
-      end
-    else
-      "."
-    end
+    Path.new(path).dirname
   end
 
   # Returns the last component of the given *path*.
@@ -214,20 +264,7 @@ class File < IO::FileDescriptor
   # File.basename("/foo/bar/file.cr") # => "file.cr"
   # ```
   def self.basename(path) : String
-    return "" if path.bytesize == 0
-    return SEPARATOR_STRING if path == SEPARATOR_STRING
-
-    path.check_no_null_byte
-
-    last = path.size - 1
-    last -= 1 if path[last] == SEPARATOR
-
-    index = path.rindex SEPARATOR, last
-    if index
-      path[index + 1, last - index]
-    else
-      path
-    end
+    Path.new(path).basename
   end
 
   # Returns the last component of the given *path*.
@@ -238,8 +275,7 @@ class File < IO::FileDescriptor
   # File.basename("/foo/bar/file.cr", ".cr") # => "file"
   # ```
   def self.basename(path, suffix) : String
-    suffix.check_no_null_byte
-    basename(path).chomp(suffix)
+    Path.new(path).basename(suffix.check_no_null_byte)
   end
 
   # Changes the owner of the specified file.
@@ -257,8 +293,8 @@ class File < IO::FileDescriptor
   # File.chown("foo", gid: 100)                        # changes foo's gid
   # File.chown("foo", gid: 100, follow_symlinks: true) # changes baz's gid
   # ```
-  def self.chown(path, uid : Int = -1, gid : Int = -1, follow_symlinks = false)
-    Crystal::System::File.chown(path, uid, gid, follow_symlinks)
+  def self.chown(path : Path | String, uid : Int = -1, gid : Int = -1, follow_symlinks = false)
+    Crystal::System::File.chown(path.to_s, uid, gid, follow_symlinks)
   end
 
   # Changes the permissions of the specified file.
@@ -268,24 +304,24 @@ class File < IO::FileDescriptor
   #
   # ```
   # File.chmod("foo", 0o755)
-  # File.stat("foo").perm # => 0o755
+  # File.info("foo").permissions.value # => 0o755
   #
   # File.chmod("foo", 0o700)
-  # File.stat("foo").perm # => 0o700
+  # File.info("foo").permissions.value # => 0o700
   # ```
-  def self.chmod(path, mode : Int)
-    Crystal::System::File.chmod(path, mode)
+  def self.chmod(path : Path | String, permissions : Int | Permissions)
+    Crystal::System::File.chmod(path.to_s, permissions)
   end
 
-  # Delete the file at *path*. Deleting non-existent file will raise an exception.
+  # Deletes the file at *path*. Deleting non-existent file will raise an exception.
   #
   # ```
   # File.write("foo", "")
   # File.delete("./foo")
   # File.delete("./bar") # raises Errno (No such file or directory)
   # ```
-  def self.delete(path)
-    Crystal::System::File.delete(path)
+  def self.delete(path : Path | String)
+    Crystal::System::File.delete(path.to_s)
   end
 
   # Returns *filename*'s extension, or an empty string if it has no extension.
@@ -294,15 +330,7 @@ class File < IO::FileDescriptor
   # File.extname("foo.cr") # => ".cr"
   # ```
   def self.extname(filename) : String
-    filename.check_no_null_byte
-
-    dot_index = filename.rindex('.')
-
-    if dot_index && dot_index != filename.size - 1 && filename[dot_index - 1] != SEPARATOR
-      filename[dot_index, filename.size - dot_index]
-    else
-      ""
-    end
+    Path.new(filename).extension
   end
 
   # Converts *path* to an absolute path. Relative paths are
@@ -315,43 +343,7 @@ class File < IO::FileDescriptor
   # File.expand_path("baz", "/foo/bar") # => "/foo/bar/baz"
   # ```
   def self.expand_path(path, dir = nil) : String
-    path.check_no_null_byte
-
-    if path.starts_with?('~')
-      home = ENV["HOME"]
-      home = home.chomp('/') unless home == "/"
-
-      if path.size >= 2 && path[1] == SEPARATOR
-        path = home + path[1..-1]
-      elsif path.size < 2
-        return home
-      end
-    end
-
-    unless path.starts_with?(SEPARATOR)
-      dir = dir ? expand_path(dir) : Dir.current
-      path = "#{dir}#{SEPARATOR}#{path}"
-    end
-
-    parts = path.split(SEPARATOR)
-    items = [] of String
-    parts.each do |part|
-      case part
-      when "", "."
-        # Nothing
-      when ".."
-        items.pop?
-      else
-        items << part
-      end
-    end
-
-    String.build do |str|
-      {% if !flag?(:windows) %}
-        str << SEPARATOR_STRING
-      {% end %}
-      items.join SEPARATOR_STRING, str
-    end
+    Path.new(path).expand(dir || Dir.current).to_s
   end
 
   class BadPatternError < Exception
@@ -366,17 +358,17 @@ class File < IO::FileDescriptor
   #   * `"c*"` matches all files beginning with `c`.
   #   * `"*c"` matches all files ending with `c`.
   #   * `"*c*"` matches all files that have `c` in them (including at the beginning or end).
-  # * `**` matches an unlimited number of arbitrary charachters including `/`.
-  # * `?` matches any one charachter excluding `/`.
+  # * `**` matches an unlimited number of arbitrary characters including `/`.
+  # * `?` matches any one character excluding `/`.
   # * character sets:
   #   * `[abc]` matches any one of these character.
   #   * `[^abc]` matches any one character other than these.
-  #   * `[a-z]` matches any one charachter in the range.
+  #   * `[a-z]` matches any one character in the range.
   # * `{a,b}` matches subpattern `a` or `b`.
   # * `\\` escapes the next character.
   #
   # NOTE: Only `/` is recognized as path separator in both *pattern* and *path*.
-  def self.match?(pattern : String, path : String)
+  def self.match?(pattern : String, path : Path | String)
     expanded_patterns = [] of String
     File.expand_brace_pattern(pattern, expanded_patterns)
 
@@ -568,30 +560,39 @@ class File < IO::FileDescriptor
     Crystal::System::File.link(old_path, new_path)
   end
 
-  # Creates a symbolic link at *new_path* to an existing file given by *old_path.
+  # Creates a symbolic link at *new_path* to an existing file given by *old_path*.
   def self.symlink(old_path, new_path)
     Crystal::System::File.symlink(old_path, new_path)
   end
 
   # Returns `true` if the *path* is a symbolic link.
   def self.symlink?(path) : Bool
-    if stat = lstat?(path)
-      stat.symlink?
+    if info = info?(path, follow_symlinks: false)
+      info.type.symlink?
     else
       false
     end
   end
 
+  # Returns value of a symbolic link .
+  def self.readlink(path) : String
+    Crystal::System::File.readlink(path)
+  end
+
   # Opens the file named by *filename*. If a file is being created, its initial
   # permissions may be set using the *perm* parameter.
-  def self.open(filename, mode = "r", perm = DEFAULT_CREATE_MODE, encoding = nil, invalid = nil) : self
+  #
+  # See `self.new` for what *mode* can be.
+  def self.open(filename : Path | String, mode = "r", perm = DEFAULT_CREATE_PERMISSIONS, encoding = nil, invalid = nil) : self
     new filename, mode, perm, encoding, invalid
   end
 
   # Opens the file named by *filename*. If a file is being created, its initial
   # permissions may be set using the *perm* parameter. Then given block will be passed the opened
   # file as an argument, the file will be automatically closed when the block returns.
-  def self.open(filename, mode = "r", perm = DEFAULT_CREATE_MODE, encoding = nil, invalid = nil)
+  #
+  # See `self.new` for what *mode* can be.
+  def self.open(filename : Path | String, mode = "r", perm = DEFAULT_CREATE_PERMISSIONS, encoding = nil, invalid = nil)
     file = new filename, mode, perm, encoding, invalid
     begin
       yield file
@@ -643,11 +644,6 @@ class File < IO::FileDescriptor
     end
   end
 
-  # Returns an `Iterator` for each line in *filename*.
-  def self.each_line(filename, encoding = nil, invalid = nil, chomp = true)
-    open(filename, "r", encoding: encoding, invalid: invalid).each_line(chomp: chomp)
-  end
-
   # Returns all lines in *filename* as an array of strings.
   #
   # ```
@@ -662,20 +658,25 @@ class File < IO::FileDescriptor
     lines
   end
 
-  # Write the given *content* to *filename*.
+  # Writes the given *content* to *filename*.
   #
-  # An existing file will be overwritten, else a file will be created.
+  # By default, an existing file will be overwritten.
+  #
+  # *filename* will be created if it does not already exist.
   #
   # ```
   # File.write("foo", "bar")
+  # File.write("foo", "baz", mode: "a")
   # ```
   #
   # NOTE: If the content is a `Slice(UInt8)`, those bytes will be written.
   # If it's an `IO`, all bytes from the `IO` will be written.
   # Otherwise, the string representation of *content* will be written
   # (the result of invoking `to_s` on *content*).
-  def self.write(filename, content, perm = DEFAULT_CREATE_MODE, encoding = nil, invalid = nil)
-    open(filename, "w", perm, encoding: encoding, invalid: invalid) do |file|
+  #
+  # See `self.new` for what *mode* can be.
+  def self.write(filename, content, perm = DEFAULT_CREATE_PERMISSIONS, encoding = nil, invalid = nil, mode = "w")
+    open(filename, mode, perm, encoding: encoding, invalid: invalid) do |file|
       case content
       when Bytes
         file.write(content)
@@ -694,8 +695,8 @@ class File < IO::FileDescriptor
   # File.join("foo/", "/bar/", "/baz")   # => "foo/bar/baz"
   # File.join("/foo/", "/bar/", "/baz/") # => "/foo/bar/baz/"
   # ```
-  def self.join(*parts) : String
-    join parts
+  def self.join(*parts : String | Path) : String
+    Path.new(*parts).to_s
   end
 
   # Returns a new string formed by joining the strings using `File::SEPARATOR`.
@@ -706,27 +707,7 @@ class File < IO::FileDescriptor
   # File.join(["/foo/", "/bar/", "/baz/"]) # => "/foo/bar/baz/"
   # ```
   def self.join(parts : Array | Tuple) : String
-    String.build do |str|
-      parts.each_with_index do |part, index|
-        part.check_no_null_byte
-
-        str << SEPARATOR if index > 0
-
-        byte_start = 0
-        byte_count = part.bytesize
-
-        if index > 0 && part.starts_with?(SEPARATOR)
-          byte_start += 1
-          byte_count -= 1
-        end
-
-        if index != parts.size - 1 && part.ends_with?(SEPARATOR)
-          byte_count -= 1
-        end
-
-        str.write part.unsafe_byte_slice(byte_start, byte_count)
-      end
-    end
+    Path.new(parts).to_s
   end
 
   # Moves *old_filename* to *new_filename*.
@@ -752,14 +733,14 @@ class File < IO::FileDescriptor
   # in the *filename* parameter to the value given in *time*.
   #
   # If the file does not exist, it will be created.
-  def self.touch(filename : String, time : Time = Time.now)
+  def self.touch(filename : String, time : Time = Time.utc)
     open(filename, "a") { } unless exists?(filename)
     utime time, time, filename
   end
 
-  # Return the size in bytes of the currently opened file.
+  # Returns the size in bytes of the currently opened file.
   def size
-    stat.size
+    info.size
   end
 
   # Truncates the file to the specified *size*. Requires that the current file is opened
@@ -767,6 +748,19 @@ class File < IO::FileDescriptor
   def truncate(size = 0) : Nil
     flush
     system_truncate(size)
+  end
+
+  # Flushes all data written to this File to the disk device so that
+  # all changed information can be retrieved even if the system
+  # crashes or is rebooted. The call blocks until the device reports that
+  # the transfer has completed.
+  # To reduce disk activity the *flush_metadata* parameter can be set to false,
+  # then the syscall *fdatasync* will be used and only data required for
+  # subsequent data retrieval is flushed. Metadata such as modified time and
+  # access time is not written.
+  def fsync(flush_metadata = true) : Nil
+    flush
+    system_fsync(flush_metadata)
   end
 
   # Yields an `IO` to read a section inside this file.
@@ -790,11 +784,10 @@ class File < IO::FileDescriptor
     yield io ensure io.close
   end
 
-  def inspect(io)
+  def inspect(io : IO) : Nil
     io << "#<File:" << @path
     io << " (closed)" if closed?
-    io << ">"
-    io
+    io << '>'
   end
 
   # TODO: use fcntl/lockf instead of flock (which doesn't lock over NFS)
@@ -809,7 +802,7 @@ class File < IO::FileDescriptor
     end
   end
 
-  # Place a shared advisory lock. More than one process may hold a shared lock for a given file at a given time.
+  # Places a shared advisory lock. More than one process may hold a shared lock for a given file at a given time.
   # `Errno::EWOULDBLOCK` is raised if *blocking* is set to `false` and an existing exclusive lock is set.
   def flock_shared(blocking = true)
     system_flock_shared(blocking)
@@ -824,15 +817,20 @@ class File < IO::FileDescriptor
     end
   end
 
-  # Place an exclusive advisory lock. Only one process may hold an exclusive lock for a given file at a given time.
+  # Places an exclusive advisory lock. Only one process may hold an exclusive lock for a given file at a given time.
   # `Errno::EWOULDBLOCK` is raised if *blocking* is set to `false` and any existing lock is set.
   def flock_exclusive(blocking = true)
     system_flock_exclusive(blocking)
   end
 
-  # Remove an existing advisory lock held by this process.
+  # Removes an existing advisory lock held by this process.
   def flock_unlock
     system_flock_unlock
+  end
+
+  # Deletes this file.
+  def delete
+    File.delete(@path)
   end
 end
 

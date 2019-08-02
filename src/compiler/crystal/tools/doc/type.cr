@@ -5,7 +5,8 @@ class Crystal::Doc::Type
 
   getter type : Crystal::Type
 
-  def initialize(@generator : Generator, @type : Crystal::Type)
+  def initialize(@generator : Generator, type : Crystal::Type)
+    @type = type.devirtualize
   end
 
   def kind
@@ -24,6 +25,8 @@ class Crystal::Doc::Type
       :enum
     when NoReturnType, VoidType
       :struct
+    when AnnotationType
+      :annotation
     else
       raise "Unhandled type in `kind`: #{@type}"
     end
@@ -458,12 +461,12 @@ class Crystal::Doc::Type
     @generator.macro(self, a_macro)
   end
 
-  def to_s(io)
+  def to_s(io : IO) : Nil
     io << name
     append_type_vars io
   end
 
-  private def append_type_vars(io)
+  private def append_type_vars(io : IO) : Nil
     type = @type
     if type_vars = type_vars()
       io << '('
@@ -520,11 +523,11 @@ class Crystal::Doc::Type
     else
       io << node.name
     end
-    io << "("
+    io << '('
     node.type_vars.join(", ", io) do |type_var|
       node_to_html type_var, io, links: links
     end
-    io << ")"
+    io << ')'
   end
 
   def node_to_html(node : ProcNotation, io, links = true)
@@ -557,12 +560,12 @@ class Crystal::Doc::Type
 
   private def nilable_type_to_html(node : ASTNode, io, links)
     node_to_html node, io, links: links
-    io << "?"
+    io << '?'
   end
 
   private def nilable_type_to_html(type : Crystal::Type, io, text, links)
     type_to_html(type, io, text, links: links)
-    io << "?"
+    io << '?'
   end
 
   def nil_type?(node : ASTNode)
@@ -573,7 +576,7 @@ class Crystal::Doc::Type
   end
 
   def node_to_html(node, io, links = true)
-    io << node
+    io << Highlighter.highlight(node.to_s)
   end
 
   def type_to_html(type)
@@ -603,7 +606,7 @@ class Crystal::Doc::Type
       type_to_html union_type, io, text, links: links
     end
 
-    io << ")" if has_type_splat
+    io << ')' if has_type_splat
   end
 
   def type_to_html(type : Crystal::ProcInstanceType, io, text = nil, links = true)
@@ -616,15 +619,15 @@ class Crystal::Doc::Type
   end
 
   def type_to_html(type : Crystal::TupleInstanceType, io, text = nil, links = true)
-    io << "{"
+    io << '{'
     type.tuple_types.join(", ", io) do |tuple_type|
       type_to_html tuple_type, io, links: links
     end
-    io << "}"
+    io << '}'
   end
 
   def type_to_html(type : Crystal::NamedTupleInstanceType, io, text = nil, links = true)
-    io << "{"
+    io << '{'
     type.entries.join(", ", io) do |entry|
       if Symbol.needs_quotes?(entry.name)
         entry.name.inspect(io)
@@ -634,7 +637,7 @@ class Crystal::Doc::Type
       io << ": "
       type_to_html entry.type, io, links: links
     end
-    io << "}"
+    io << '}'
   end
 
   def type_to_html(type : Crystal::GenericInstanceType, io, text = nil, links = true)
@@ -833,5 +836,9 @@ class Crystal::Doc::Type
       builder.field "full_name", full_name
       builder.field "name", name
     end
+  end
+
+  def annotations(annotation_type)
+    @type.annotations(annotation_type)
   end
 end

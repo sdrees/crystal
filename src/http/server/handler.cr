@@ -5,6 +5,8 @@
 # ### A custom handler
 #
 # ```
+# require "http/server/handler"
+#
 # class CustomHandler
 #   include HTTP::Handler
 #
@@ -15,7 +17,7 @@
 # end
 # ```
 module HTTP::Handler
-  property next : Handler | Proc | Nil
+  property next : Handler | HandlerProc | Nil
 
   abstract def call(context : HTTP::Server::Context)
 
@@ -23,13 +25,13 @@ module HTTP::Handler
     if next_handler = @next
       next_handler.call(context)
     else
-      context.response.status_code = 404
+      context.response.status = :not_found
       context.response.headers["Content-Type"] = "text/plain"
       context.response.puts "Not Found"
     end
   end
 
-  alias Proc = HTTP::Server::Context ->
+  alias HandlerProc = HTTP::Server::Context ->
 end
 
 require "./handlers/*"

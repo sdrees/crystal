@@ -87,7 +87,7 @@ module Crystal
       exps = Array(ASTNode).new(node.entries.size + 2)
       exps << Assign.new(temp_var.clone, constructor).at(node)
       node.entries.each do |entry|
-        exps << Call.new(temp_var.clone, "[]=", [entry.key.clone, entry.value.clone]).at(node)
+        exps << Call.new(temp_var.clone, "[]=", [entry.key.clone, entry.value.clone] of ASTNode).at(node)
       end
       exps << temp_var.clone
 
@@ -373,6 +373,22 @@ module Crystal
     #     end
     def expand(node : Case)
       node_cond = node.cond
+
+      if node.whens.empty?
+        expressions = [] of ASTNode
+
+        node_else = node.else
+        if node_cond
+          expressions << node_cond
+          expressions << NilLiteral.new unless node_else
+        end
+        if node_else
+          expressions << node_else
+        end
+
+        return Expressions.new(expressions).at(node)
+      end
+
       if node_cond
         if node_cond.is_a?(TupleLiteral)
           conds = node_cond.elements

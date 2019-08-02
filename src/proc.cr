@@ -190,7 +190,7 @@ struct Proc
     self
   end
 
-  def to_s(io)
+  def to_s(io : IO) : Nil
     io << "#<"
     io << {{@type.name.stringify}}
     io << ":0x"
@@ -198,7 +198,7 @@ struct Proc
     if closure?
       io << ":closure"
     end
-    io << ">"
+    io << '>'
     nil
   end
 end

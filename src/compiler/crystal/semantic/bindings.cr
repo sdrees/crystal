@@ -10,11 +10,26 @@ module Crystal
     @type : Type?
 
     def type
-      @type || ::raise "BUG: `#{self}` at #{self.location} has no type"
+      type? || ::raise "BUG: `#{self}` at #{self.location} has no type"
     end
 
     def type?
-      @type
+      @type || @freeze_type
+    end
+
+    def type(*, with_literals = false)
+      type = self.type
+
+      if with_literals
+        case self
+        when NumberLiteral
+          return NumberLiteralType.new(type.program, self)
+        when SymbolLiteral
+          return SymbolLiteralType.new(type.program, self)
+        end
+      end
+
+      type
     end
 
     def set_type(type : Type)
@@ -281,12 +296,40 @@ module Crystal
     end
   end
 
+  class Union
+    property? inside_is_a = false
+
+    def update(from = nil)
+      computed_types = types.compact_map do |subtype|
+        instance_type = subtype.type?
+        next unless instance_type
+
+        unless instance_type.can_be_stored?
+          subtype.raise "can't use #{instance_type} in unions yet, use a more specific type"
+        end
+        instance_type.virtual_type
+      end
+
+      return if computed_types.empty?
+
+      program = computed_types.first.program
+
+      if inside_is_a?
+        self.type = program.type_merge_union_of(computed_types)
+      else
+        self.type = program.type_merge(computed_types)
+      end
+    end
+  end
+
   class Cast
     property? upcast = false
 
     def update(from = nil)
+      to_type = to.type?
+      return unless to_type
+
       obj_type = obj.type?
-      to_type = to.type
 
       @upcast = false
 
@@ -299,16 +342,20 @@ module Crystal
         #   1 as Int32 | Float64
         #   Bar.new as Foo # where Bar < Foo
         if obj_type == filtered_type && !to_type.is_a?(GenericClassType) &&
-           to_type.allowed_in_generics?
+           to_type.can_be_stored?
           filtered_type = to_type
           @upcast = true
         end
       end
 
+      # If we couldn't filter the type and we are casting to something that
+      # isn't allowed in variables (like Int or uninstantiated Array(T))
+      # we can't guess a type.
+      return if !filtered_type && !to_type.can_be_stored?
+
       # If we don't have a matching type, leave it as the to_type:
       # later (in cleanup) we will check again.
       filtered_type ||= to_type
-
       self.type = filtered_type.virtual_type
     end
   end
@@ -318,8 +365,10 @@ module Crystal
     getter! non_nilable_type : Type
 
     def update(from = nil)
+      to_type = to.type?
+      return unless to_type
+
       obj_type = obj.type?
-      to_type = to.type
 
       @upcast = false
 
@@ -332,10 +381,18 @@ module Crystal
         #   1 as Int32 | Float64
         #   Bar.new as Foo # where Bar < Foo
         if obj_type == filtered_type && !to_type.is_a?(GenericClassType) &&
-           to_type.allowed_in_generics?
+           to_type.can_be_stored?
           filtered_type = to_type.virtual_type
           @upcast = true
         end
+      end
+
+      # If we couldn't filter the type and we are casting to something that
+      # isn't allowed in variables (like Int or uninstantiated Array(T))
+      # we can't guess a type.
+      if !filtered_type && !to_type.can_be_stored?
+        self.type = to_type.program.nil_type
+        return
       end
 
       # If we don't have a matching type, leave it as the to_type:
@@ -415,7 +472,7 @@ module Crystal
             node.raise "can't use constant as type for NamedTuple"
           end
 
-          Crystal.check_type_allowed_in_generics(node, node_type, "can't use #{node_type} as generic type argument")
+          Crystal.check_type_can_be_stored(node, node_type, "can't use #{node_type} as generic type argument")
           node_type = node_type.virtual_type
 
           NamedArgumentType.new(named_arg.name, node_type)
@@ -432,6 +489,9 @@ module Crystal
             node = expanded
           end
           if node.is_a?(InstanceSizeOf) && (expanded = node.expanded)
+            node = expanded
+          end
+          if node.is_a?(OffsetOf) && (expanded = node.expanded)
             node = expanded
           end
 
@@ -459,14 +519,14 @@ module Crystal
                 if visitor
                   numeric_value = visitor.interpret_enum_value(value)
                   numeric_type = node_type.program.int?(numeric_value) || raise "BUG: expected integer type, not #{numeric_value.class}"
-                  type_var = NumberLiteral.new(numeric_value, numeric_type.kind)
+                  type_var = NumberLiteral.new(numeric_value.to_s, numeric_type.kind)
                   type_var.set_type_from(numeric_type, from)
                 else
                   node.raise "can't use constant #{node} (value = #{value}) as generic type argument, it must be a numeric constant"
                 end
               end
             else
-              Crystal.check_type_allowed_in_generics(node, node_type, "can't use #{node_type} as generic type argument")
+              Crystal.check_type_can_be_stored(node, node_type, "can't use #{node_type} as generic type argument")
               type_var = node_type.virtual_type
             end
           end
@@ -477,7 +537,7 @@ module Crystal
         begin
           generic_type = instance_type.as(GenericType).instantiate(type_vars_types)
         rescue ex : Crystal::Exception
-          raise ex.message
+          raise ex.message, ex
         end
       end
 
@@ -504,7 +564,7 @@ module Crystal
       end
 
       if types.size > 300
-        raise "tuple too big: Tuple(#{types[0...10].join(",")}, ...)"
+        raise "tuple size cannot be greater than 300 (size is #{types.size})"
       end
 
       self.type = tuple_type
@@ -528,7 +588,7 @@ module Crystal
       end
 
       if entries.size > 300
-        raise "named tuple too big: #{named_tuple_type}"
+        raise "named tuple size cannot be greater than 300 (size is #{entries.size})"
       end
 
       self.type = named_tuple_type
@@ -541,6 +601,10 @@ module Crystal
     def update(from = nil)
       obj_type = obj.type?
       return unless obj_type
+
+      if obj_type.is_a?(UnionType)
+        raise "can't read instance variables of union types (#{name} of #{obj_type})"
+      end
 
       var = visitor.lookup_instance_var(self, obj_type)
       self.type = var.type

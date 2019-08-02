@@ -166,6 +166,7 @@ class Dir
         when EntryMatch
           return if sequence[pos + 1]?.is_a?(RecursiveDirectories)
           each_child(path) do |entry|
+            next if !options[:match_hidden] && entry.starts_with?('.')
             yield join(path, entry) if cmd.matches?(entry)
           end
         when DirectoryMatch
@@ -182,7 +183,7 @@ class Dir
         when ConstantEntry
           return if sequence[pos + 1]?.is_a?(RecursiveDirectories)
           full = join(path, cmd.path)
-          yield full if File.exists?(full)
+          yield full if File.exists?(full) || File.symlink?(full)
         when ConstantDirectory
           path_stack << {next_pos, join(path, cmd.path)}
           # Don't check if full exists. It just costs us time
@@ -219,7 +220,7 @@ class Dir
 
             if entry = dir.try(&.read)
               next if {".", ".."}.includes?(entry)
-              next if entry[0] == '.' && !options[:match_hidden]
+              next if !options[:match_hidden] && entry.starts_with?('.')
 
               if dir_path.bytesize == 0
                 fullpath = entry
@@ -260,18 +261,18 @@ class Dir
     private def self.root
       # TODO: better implementation for windows?
       {% if flag?(:windows) %}
-      "C:\\"
+        "C:\\"
       {% else %}
-      File::SEPARATOR_STRING
+        File::SEPARATOR_STRING
       {% end %}
     end
 
     private def self.dir?(path)
-      return true unless path
-      stat = File.lstat(path)
-      stat.directory? && !stat.symlink?
-    rescue Errno
-      false
+      if info = File.info?(path, follow_symlinks: false)
+        info.type.directory?
+      else
+        false
+      end
     end
 
     private def self.join(path, entry)

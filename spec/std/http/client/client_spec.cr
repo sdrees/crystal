@@ -1,24 +1,30 @@
-require "spec"
+require "../spec_helper"
 require "openssl"
 require "http/client"
 require "http/server"
 
-private class TestServer < TCPServer
-  def self.open(host, port, read_time = 0)
-    server = new(host, port)
-    begin
-      spawn do
-        io = server.accept
-        sleep read_time
-        response = HTTP::Client::Response.new(200, headers: HTTP::Headers{"Content-Type" => "text/plain"}, body: "OK")
+private def test_server(host, port, read_time = 0, content_type = "text/plain", write_response = true)
+  server = TCPServer.new(host, port)
+  begin
+    spawn do
+      io = server.accept
+      sleep read_time
+      if write_response
+        response = HTTP::Client::Response.new(200, headers: HTTP::Headers{"Content-Type" => content_type}, body: "OK")
         response.to_io(io)
         io.flush
       end
-
-      yield server
-    ensure
-      server.close
     end
+
+    yield server
+  ensure
+    server.close
+  end
+end
+
+private class TestClient < HTTP::Client
+  def set_defaults(request)
+    super
   end
 end
 
@@ -30,7 +36,7 @@ module HTTP
     typeof(Client.new(URI.new))
     typeof(Client.new(URI.parse("http://www.example.com")))
 
-    {% for method in %w(get post put head delete patch) %}
+    {% for method in %w(get post put head delete patch options) %}
       typeof(Client.{{method.id}} "url")
       typeof(Client.new("host").{{method.id}}("uri"))
       typeof(Client.new("host").{{method.id}}("uri", headers: Headers {"Content-Type" => "text/plain"}))
@@ -53,6 +59,21 @@ module HTTP
     typeof(Client.new("host").post("/", body: IO::Memory.new))
     typeof(Client.post("http://www.example.com", body: Bytes[65]))
     typeof(Client.new("host").post("/", body: Bytes[65]))
+
+    describe "from String" do
+      it "raises when not a host" do
+        ["http://www.example.com",
+         "www.example.com:8080",
+         "example.com/path",
+         "example.com?query",
+         "http://example.com:bad_port",
+         "user:pass@domain"].each do |string|
+          expect_raises(ArgumentError, "The string passed to create an HTTP::Client must be just a host, not #{string.inspect}") do
+            Client.new(string)
+          end
+        end
+      end
+    end
 
     describe "from URI" do
       it "has sane defaults" do
@@ -121,13 +142,48 @@ module HTTP
       end
     end
 
+    it "sends the host header ipv6 with brackets" do
+      server = HTTP::Server.new do |context|
+        context.response.print context.request.headers["Host"]
+      end
+      address = server.bind_unused_port "::1"
+
+      run_server(server) do
+        HTTP::Client.get("http://[::1]:#{address.port}/").body.should eq("[::1]:#{address.port}")
+      end
+    end
+
+    it "sends a 'connection: close' header on one-shot request" do
+      server = HTTP::Server.new do |context|
+        context.response.print context.request.headers["connection"]
+      end
+      address = server.bind_unused_port "::1"
+
+      run_server(server) do
+        HTTP::Client.get("http://[::1]:#{address.port}/").body.should eq("close")
+      end
+    end
+
+    it "sends a 'connection: close' header on one-shot request with block" do
+      server = HTTP::Server.new do |context|
+        context.response.print context.request.headers["connection"]
+      end
+      address = server.bind_unused_port "::1"
+
+      run_server(server) do
+        HTTP::Client.get("http://[::1]:#{address.port}/") do |response|
+          response.body_io.gets_to_end
+        end.should eq("close")
+      end
+    end
+
     it "doesn't read the body if request was HEAD" do
-      resp_get = TestServer.open("localhost", 0, 0) do |server|
+      resp_get = test_server("localhost", 0, 0) do |server|
         client = Client.new("localhost", server.local_address.port)
         break client.get("/")
       end
 
-      TestServer.open("localhost", 0, 0) do |server|
+      test_server("localhost", 0, 0) do |server|
         client = Client.new("localhost", server.local_address.port)
         resp_head = client.head("/")
         resp_head.headers.should eq(resp_get.headers)
@@ -148,13 +204,17 @@ module HTTP
     end
 
     it "tests read_timeout" do
-      TestServer.open("localhost", 0, 0) do |server|
+      test_server("localhost", 0, 0) do |server|
         client = Client.new("localhost", server.local_address.port)
         client.read_timeout = 1.second
         client.get("/")
       end
 
-      TestServer.open("localhost", 0, 0.5) do |server|
+      # Here we don't want to write a response on the server side because
+      # it doesn't make sense to try to write because the client will already
+      # timeout on read. Writing a response could lead on an exception in
+      # the server if the socket is closed.
+      test_server("localhost", 0, 0.5, write_response: false) do |server|
         client = Client.new("localhost", server.local_address.port)
         expect_raises(IO::Timeout, "Read timed out") do
           client.read_timeout = 0.001
@@ -164,10 +224,30 @@ module HTTP
     end
 
     it "tests connect_timeout" do
-      TestServer.open("localhost", 0, 0) do |server|
+      test_server("localhost", 0, 0) do |server|
         client = Client.new("localhost", server.local_address.port)
         client.connect_timeout = 0.5
         client.get("/")
+      end
+    end
+
+    it "tests empty Content-Type" do
+      test_server("localhost", 0, content_type: "") do |server|
+        client = Client.new("localhost", server.local_address.port)
+        client.get("/")
+      end
+    end
+
+    describe "#set_defaults" do
+      it "sets default Host header" do
+        client = TestClient.new "www.example.com"
+        request = HTTP::Request.new("GET", "/")
+        client.set_defaults(request)
+        request.host.should eq "www.example.com"
+
+        request = HTTP::Request.new("GET", "/", HTTP::Headers{"Host" => "other.example.com"})
+        client.set_defaults(request)
+        request.host.should eq "other.example.com"
       end
     end
   end

@@ -47,7 +47,7 @@ def semantic(code : String, wants_doc = false, inject_primitives = true)
 end
 
 def semantic(node : ASTNode, wants_doc = false)
-  program = Program.new
+  program = new_program
   program.wants_doc = wants_doc
   node = program.normalize node
   node = program.semantic node
@@ -56,8 +56,8 @@ end
 
 def semantic_result(str, flags = nil, inject_primitives = true)
   str = inject_primitives(str) if inject_primitives
-  program = Program.new
-  program.flags = flags if flags
+  program = new_program
+  program.flags.concat(flags.split) if flags
   input = parse str
   input = program.normalize input
   input = program.semantic input
@@ -66,8 +66,8 @@ def semantic_result(str, flags = nil, inject_primitives = true)
 end
 
 def assert_normalize(from, to, flags = nil)
-  program = Program.new
-  program.flags = flags if flags
+  program = new_program
+  program.flags.concat(flags.split) if flags
   normalizer = Normalizer.new(program)
   from_nodes = Parser.parse(from)
   to_nodes = program.normalize(from_nodes)
@@ -79,7 +79,7 @@ def assert_expand(from : String, to)
 end
 
 def assert_expand(from_nodes : ASTNode, to)
-  to_nodes = LiteralExpander.new(Program.new).expand(from_nodes)
+  to_nodes = LiteralExpander.new(new_program).expand(from_nodes)
   to_nodes.to_s.strip.should eq(to.strip)
 end
 
@@ -108,25 +108,48 @@ def assert_error(str, message, inject_primitives = true)
   end
 end
 
-def assert_macro(macro_args, macro_body, call_args, expected, flags = nil)
-  assert_macro(macro_args, macro_body, expected, flags) { call_args }
+def warnings_result(code, inject_primitives = true)
+  code = inject_primitives(code) if inject_primitives
+
+  output_filename = Crystal.tempfile("crystal-spec-output")
+
+  compiler = Compiler.new
+  compiler.warnings = Warnings::All
+  compiler.error_on_warnings = false
+  compiler.prelude = "empty" # avoid issues in the current std lib
+  compiler.color = false
+  apply_program_flags(compiler.flags)
+  result = compiler.compile Compiler::Source.new("code.cr", code), output_filename
+
+  result.program.warning_failures
 end
 
-def assert_macro(macro_args, macro_body, expected, flags = nil)
-  program = Program.new
-  program.flags = flags if flags
+def assert_warning(code, message, inject_primitives = true)
+  warning_failures = warnings_result(code, inject_primitives)
+  warning_failures.size.should eq(1)
+  warning_failures[0].should start_with(message)
+end
+
+def assert_macro(macro_args, macro_body, call_args, expected, expected_pragmas = nil, flags = nil)
+  assert_macro(macro_args, macro_body, expected, expected_pragmas, flags) { call_args }
+end
+
+def assert_macro(macro_args, macro_body, expected, expected_pragmas = nil, flags = nil)
+  program = new_program
+  program.flags.concat(flags.split) if flags
   sub_node = yield program
-  assert_macro_internal program, sub_node, macro_args, macro_body, expected
+  assert_macro_internal program, sub_node, macro_args, macro_body, expected, expected_pragmas
 end
 
-def assert_macro_internal(program, sub_node, macro_args, macro_body, expected)
+def assert_macro_internal(program, sub_node, macro_args, macro_body, expected, expected_pragmas)
   macro_def = "macro foo(#{macro_args});#{macro_body};end"
   a_macro = Parser.parse(macro_def).as(Macro)
 
   call = Call.new(nil, "", sub_node)
-  result = program.expand_macro a_macro, call, program, program
+  result, result_pragmas = program.expand_macro a_macro, call, program, program
   result = result.chomp(';')
   result.should eq(expected)
+  result_pragmas.should eq(expected_pragmas) if expected_pragmas
 end
 
 def codegen(code, inject_primitives = true, debug = Crystal::Debug::None)
@@ -134,6 +157,31 @@ def codegen(code, inject_primitives = true, debug = Crystal::Debug::None)
   node = parse code
   result = semantic node
   result.program.codegen(result.node, single_module: false, debug: debug)[""].mod
+end
+
+private def new_program
+  program = Program.new
+  program.color = false
+  apply_program_flags(program.flags)
+  program
+end
+
+# Use CRYSTAL_SPEC_COMPILER_FLAGS env var to run the compiler specs
+# against a compiler with the specified options.
+# Separate flags with a space.
+# Using CRYSTAL_SPEC_COMPILER_FLAGS="foo bar" will mimic -Dfoo -Dbar options.
+private def apply_program_flags(target)
+  ENV["CRYSTAL_SPEC_COMPILER_FLAGS"]?.try { |f| target.concat(f.split) }
+end
+
+private def encode_program_flags : String
+  program_flags_options.join(' ')
+end
+
+def program_flags_options : Array(String)
+  f = [] of String
+  apply_program_flags(f)
+  f.map { |x| "-D#{x}" }
 end
 
 class Crystal::SpecRunOutput
@@ -153,7 +201,7 @@ class Crystal::SpecRunOutput
   end
 end
 
-def run(code, filename = nil, inject_primitives = true, debug = Crystal::Debug::None)
+def run(code, filename = nil, inject_primitives = true, debug = Crystal::Debug::None, flags = nil)
   code = inject_primitives(code) if inject_primitives
 
   # Code that requires the prelude doesn't run in LLVM's MCJIT
@@ -161,7 +209,7 @@ def run(code, filename = nil, inject_primitives = true, debug = Crystal::Debug::
   # in the current executable!), so instead we compile
   # the program and run it, printing the last
   # expression and using that to compare the result.
-  if code.includes?(%(require "prelude"))
+  if code.includes?(%(require "prelude")) || flags
     ast = Parser.parse(code).as(Expressions)
     last = ast.expressions.last
     assign = Assign.new(Var.new("__tempvar"), last)
@@ -174,6 +222,8 @@ def run(code, filename = nil, inject_primitives = true, debug = Crystal::Debug::
 
     compiler = Compiler.new
     compiler.debug = debug
+    compiler.flags.concat flags if flags
+    apply_program_flags(compiler.flags)
     compiler.compile Compiler::Source.new("spec", code), output_filename
 
     output = `#{output_filename}`
@@ -181,8 +231,28 @@ def run(code, filename = nil, inject_primitives = true, debug = Crystal::Debug::
 
     SpecRunOutput.new(output)
   else
-    Program.new.run(code, filename: filename, debug: debug)
+    new_program.run(code, filename: filename, debug: debug)
   end
+end
+
+def build_and_run(code)
+  code_file = File.tempname("build_and_run_code")
+
+  # write code to the temp file
+  File.write(code_file, code)
+
+  binary_file = File.tempname("build_and_run_bin")
+
+  `bin/crystal build #{encode_program_flags} #{code_file.path.inspect} -o #{binary_file.path.inspect}`
+  File.exists?(binary_file).should be_true
+
+  out_io, err_io = IO::Memory.new, IO::Memory.new
+  status = Process.run(binary_file, output: out_io, error: err_io)
+
+  {status, out_io.to_s, err_io.to_s}
+ensure
+  File.delete(code_file) if code_file
+  File.delete(binary_file) if binary_file
 end
 
 def test_c(c_code, crystal_code)

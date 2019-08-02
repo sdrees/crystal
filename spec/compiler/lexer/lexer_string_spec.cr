@@ -227,7 +227,7 @@ describe "Lexer string" do
 
     tester.string_should_start_correctly
     tester.next_token_should_be(:NEWLINE)
-    tester.next_string_token_should_be("abc")
+    tester.next_string_token_should_be("\abc")
     tester.string_should_have_an_interpolation_of("foo")
     tester.string_should_end_correctly
   end
@@ -245,7 +245,7 @@ describe "Lexer string" do
     end
   end
 
-  it "raises when identifier doesn't start with a leter or number" do
+  it "raises when identifier doesn't start with a letter or number" do
     lexer = Lexer.new("<<-!!!\\ntest\n!!!\n")
 
     expect_raises Crystal::SyntaxException, /heredoc identifier starts with invalid character/ do

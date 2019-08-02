@@ -94,19 +94,37 @@ describe YAML::Schema::Core do
   end
 
   # integer (base 10)
+  it_parses_scalar "0", 0
   it_parses_scalar "123", 123
   it_parses_scalar "+123", 123
   it_parses_scalar "-123", -123
 
   # integer (binary)
+  it_parses_scalar "0b0", 0
   it_parses_scalar "0b10110", 0b10110
 
   # integer (octal)
-  it_parses_scalar "0123", 0o123
+  it_parses_scalar "00", 0
+  it_parses_scalar "0o0", 0
+  it_parses_scalar "0o123", 0o123
+  it_parses_scalar "0755", 0o755
 
   # integer (hex)
+  it_parses_scalar "0x0", 0
   it_parses_scalar "0x123abc", 0x123abc
   it_parses_scalar "-0x123abc", -0x123abc
+
+  # float
+  it_parses_scalar "1.2", 1.2
+  it_parses_scalar "0.815", 0.815
+  it_parses_scalar "0.", 0.0
+  it_parses_scalar "-0.0", 0.0
+  it_parses_scalar "1_234.2", 1_234.2
+  it_parses_scalar "-2E+05", -2e05
+  it_parses_scalar "+12.3", 12.3
+  it_parses_scalar ".5", 0.5
+  it_parses_scalar "+.5", 0.5
+  it_parses_scalar "-.5", -0.5
 
   # time
   it_parses_scalar "2002-12-14", Time.utc(2002, 12, 14)
@@ -176,14 +194,26 @@ describe YAML::Schema::Core do
 
   # !!float
   it_parses "!!float '1.2'", 1.2
+  it_parses "!!float '0.5'", 0.5
   it_parses "!!float '1_234.2'", 1_234.2
+
+  it_parses "!!float -1", -1.0
+  it_parses "!!float 0", 0.0
+  it_parses "!!float 2.3e4", 2.3e4
+
+  it "parses !!float .nan" do
+    YAML::Schema::Core.parse("!!float .nan").as_f.nan?.should be_true
+  end
+
   it_parses "!!float .inf", Float64::INFINITY
   it_raises_on_parse "!!float 'hello'", "Invalid float"
 
   # !!int
+  it_parses "!!int 0", 0
   it_parses "!!int 123", 123
   it_parses "!!int 0b10", 0b10
-  it_parses "!!int 0123", 0o123
+  it_parses "!!int 0o123", 0o123
+  it_parses "!!int 0755", 0o755
   it_parses "!!int 0xabc", 0xabc
   it_parses "!!int -123", -123
   it_raises_on_parse "!!int 'hello'", "Invalid int"

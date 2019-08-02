@@ -1,16 +1,25 @@
 require "../syntax/ast"
 
 module Crystal
-  def self.check_type_allowed_in_generics(node, type, msg)
-    return if type.allowed_in_generics?
+  def self.check_type_can_be_stored(node, type, msg)
+    return if type.can_be_stored?
 
-    type = type.union_types.find { |t| !t.allowed_in_generics? } if type.is_a?(UnionType)
+    type = type.union_types.find { |t| !t.can_be_stored? } if type.is_a?(UnionType)
     node.raise "#{msg} yet, use a more specific type"
   end
 
   class ASTNode
     def raise(message, inner = nil, exception_type = Crystal::TypeException)
       ::raise exception_type.for_node(self, message, inner)
+    end
+
+    def warning(message, inner = nil, exception_type = Crystal::TypeException)
+      # TODO extract message formatting from exceptions
+      String.build do |io|
+        exception = exception_type.for_node(self, message, inner)
+        exception.warning = true
+        exception.append_to_s(nil, io)
+      end
     end
 
     def simple_literal?
@@ -77,21 +86,20 @@ module Crystal
     def_equals_and_hash type
   end
 
-  # Fictitious node to represent a type restriction
-  #
-  # It is used for type restrection of method arguments.
-  class TypeRestriction < ASTNode
-    getter obj
-    getter to
+  # Fictitious node to represent an assignment with a type restriction,
+  # created to match the assignment of a method argument's default value.
+  class AssignWithRestriction < ASTNode
+    property assign
+    property restriction
 
-    def initialize(@obj : ASTNode, @to : ASTNode)
+    def initialize(@assign : Assign, @restriction : ASTNode)
     end
 
     def clone_without_location
-      TypeRestriction.new @obj.clone, @to.clone
+      AssignWithRestriction.new @assign.clone, @restriction.clone
     end
 
-    def_equals_and_hash obj, to
+    def_equals_and_hash assign, restriction
   end
 
   class Arg
@@ -124,20 +132,23 @@ module Crystal
     property? self_closured = false
     property? captured_block = false
 
-    # `true` if this def has the `@[NoInline]` attribute
+    # `true` if this def has the `@[NoInline]` annotation
     property? no_inline = false
 
-    # `true` if this def has the `@[AlwaysInline]` attribute
+    # `true` if this def has the `@[AlwaysInline]` annotation
     property? always_inline = false
 
-    # `true` if this def has the `@[ReturnsTwice]` attribute
+    # `true` if this def has the `@[ReturnsTwice]` annotation
     property? returns_twice = false
 
-    # `true` if this def has the `@[Naked]` attribute
+    # `true` if this def has the `@[Naked]` annotation
     property? naked = false
 
     # Is this a `new` method that was expanded from an initialize?
     property? new = false
+
+    # Annotations on this def
+    property annotations : Hash(AnnotationType, Array(Annotation))?
 
     @macro_owner : Type?
 
@@ -168,6 +179,23 @@ module Crystal
       end
     end
 
+    # Adds an annotation with the given type and value
+    def add_annotation(annotation_type : AnnotationType, value : Annotation)
+      annotations = @annotations ||= {} of AnnotationType => Array(Annotation)
+      annotations[annotation_type] ||= [] of Annotation
+      annotations[annotation_type] << value
+    end
+
+    # Returns the last defined annotation with the given type, if any, or `nil` otherwise
+    def annotation(annotation_type) : Annotation?
+      @annotations.try &.[annotation_type]?.try &.last?
+    end
+
+    # Returns all annotations with the given type, if any, or `nil` otherwise
+    def annotations(annotation_type) : Array(Annotation)?
+      @annotations.try &.[annotation_type]?
+    end
+
     # Returns the minimum and maximum number of arguments that must
     # be passed to this method.
     def min_max_args_sizes
@@ -195,6 +223,7 @@ module Crystal
       a_def.always_inline = always_inline?
       a_def.returns_twice = returns_twice?
       a_def.naked = naked?
+      a_def.annotations = annotations
       a_def.new = new?
       a_def
     end
@@ -443,7 +472,7 @@ module Crystal
       self
     end
 
-    def inspect(io)
+    def inspect(io : IO) : Nil
       io << name
       if type = type?
         io << " : "
@@ -481,6 +510,9 @@ module Crystal
     # Is this variable "unsafe" (no need to check if it was initialized)?
     property? uninitialized = false
 
+    # Annotations of this instance var
+    property annotations : Hash(AnnotationType, Array(Annotation))?
+
     def kind
       case name[0]
       when '@'
@@ -497,6 +529,23 @@ module Crystal
     def global?
       kind == :global
     end
+
+    # Adds an annotation with the given type and value
+    def add_annotation(annotation_type : AnnotationType, value : Annotation)
+      annotations = @annotations ||= {} of AnnotationType => Array(Annotation)
+      annotations[annotation_type] ||= [] of Annotation
+      annotations[annotation_type] << value
+    end
+
+    # Returns the last defined annotation with the given type, if any, or `nil` otherwise
+    def annotation(annotation_type) : Annotation?
+      @annotations.try &.[annotation_type]?.try &.last?
+    end
+
+    # Returns all annotations with the given type, if any, or `nil` otherwise
+    def annotations(annotation_type) : Array(Annotation)?
+      @annotations.try &.[annotation_type]?
+    end
   end
 
   class ClassVar
@@ -511,6 +560,7 @@ module Crystal
 
   class Path
     property target_const : Const?
+    property target_type : Type?
     property syntax_replacement : ASTNode?
   end
 
@@ -570,8 +620,8 @@ module Crystal
   {% for name in %w(And Or
                    ArrayLiteral HashLiteral RegexLiteral RangeLiteral
                    Case StringInterpolation
-                   MacroExpression MacroIf MacroFor MultiAssign
-                   SizeOf InstanceSizeOf Global Require Select) %}
+                   MacroExpression MacroIf MacroFor MacroVerbatim MultiAssign
+                   SizeOf InstanceSizeOf OffsetOf Global Require Select) %}
     class {{name.id}}
       include ExpandableNode
     end
@@ -652,7 +702,7 @@ module Crystal
   end
 
   class Asm
-    property ptrof : PointerOf?
+    property output_ptrofs : Array(PointerOf)?
   end
 
   # Fictitious node that means "all these nodes come from this file"
@@ -716,5 +766,41 @@ module Crystal
     end
 
     def_equals_and_hash value
+  end
+
+  # Fictitious node representing a variable in macros
+  class MetaMacroVar < ASTNode
+    property name : String
+    property default_value : ASTNode?
+
+    # The instance variable associated with this meta macro var
+    property! var : MetaTypeVar
+
+    def initialize(@name, @type)
+    end
+
+    def class_desc
+      "MetaVar"
+    end
+
+    def clone_without_location
+      self
+    end
+  end
+
+  class NumberLiteral
+    def can_be_autocast_to?(other_type)
+      case {self.type, other_type}
+      when {IntegerType, IntegerType}
+        min, max = other_type.range
+        min <= integer_value <= max
+      when {IntegerType, FloatType}
+        true
+      when {FloatType, FloatType}
+        true
+      else
+        false
+      end
+    end
   end
 end

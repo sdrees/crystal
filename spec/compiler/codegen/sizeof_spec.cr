@@ -48,7 +48,7 @@ describe "Code gen: sizeof" do
     # be struct { 8 bytes, 8 bytes }.
     #
     # In 32 bits structs are aligned to 4 bytes, so it remains the same.
-    {% if flag?(:x86_64) %}
+    {% if flag?(:bits64) %}
       size.should eq(16)
     {% else %}
       size.should eq(12)
@@ -66,14 +66,6 @@ describe "Code gen: sizeof" do
 
       instance_sizeof(Foo)
       ").to_i.should eq(16)
-  end
-
-  it "gives error if using instance_sizeof on something that's not a class" do
-    assert_error "instance_sizeof(Int32)", "Int32 is not a class, it's a struct"
-  end
-
-  it "gives error if using instance_sizeof on a generic type without type vars" do
-    assert_error "instance_sizeof(Array)", "can't calculate instance_sizeof of generic class"
   end
 
   it "gets instance_sizeof a generic type with type vars" do
@@ -137,7 +129,7 @@ describe "Code gen: sizeof" do
       sizeof(typeof(foo))
       )).to_i
 
-    {% if flag?(:x86_64) %}
+    {% if flag?(:bits64) %}
       size.should eq(8)
     {% else %}
       size.should eq(4)
@@ -207,4 +199,40 @@ describe "Code gen: sizeof" do
       size.should eq(16)
     end
   {% end %}
+
+  it "doesn't precompute sizeof of abstract struct (#7741)" do
+    run(%(
+      abstract struct Base
+      end
+
+      struct Foo(T) < Base
+        def initialize(@x : T)
+        end
+      end
+
+      z = sizeof(Base)
+
+      Foo({Int32, Int32, Int32, Int32})
+
+      z)).to_i.should eq(16)
+  end
+
+  it "doesn't precompute sizeof of module (#7741)" do
+    run(%(
+      module Base
+      end
+
+      struct Foo(T)
+        include Base
+
+        def initialize(@x : T)
+        end
+      end
+
+      z = sizeof(Base)
+
+      Foo({Int32, Int32, Int32, Int32})
+
+      z)).to_i.should eq(16)
+  end
 end

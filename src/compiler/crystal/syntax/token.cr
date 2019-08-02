@@ -95,6 +95,10 @@ module Crystal
       @type == :TOKEN && @value == token
     end
 
+    def keyword?
+      @type == :IDENT && @value.is_a?(Symbol)
+    end
+
     def keyword?(keyword)
       @type == :IDENT && @value == keyword
     end
@@ -111,7 +115,7 @@ module Crystal
       @doc_buffer = other.doc_buffer
     end
 
-    def to_s(io)
+    def to_s(io : IO) : Nil
       @value ? @value.to_s(io) : @type.to_s(io)
     end
   end

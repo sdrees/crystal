@@ -38,15 +38,15 @@ describe "Crypto::Bcrypt::Password" do
     end
   end
 
-  describe "==" do
+  describe "verify" do
     password = Crypto::Bcrypt::Password.create("secret", 4)
 
     it "verifies password is incorrect" do
-      (password == "wrong").should be_false
+      (password.verify "wrong").should be_false
     end
 
     it "verifies password is correct" do
-      (password == "secret").should be_true
+      (password.verify "secret").should be_true
     end
   end
 end

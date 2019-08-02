@@ -285,15 +285,6 @@ describe "Semantic: lib" do
       )) { float64 }
   end
 
-  it "errors if applying wrong attribute" do
-    assert_error %(
-      @[Bar]
-      lib LibFoo
-      end
-      ),
-      "illegal attribute for lib, valid attributes are: Link"
-  end
-
   it "errors if missing link arguments" do
     assert_error %(
       @[Link]
@@ -438,7 +429,7 @@ describe "Semantic: lib" do
       LibSDL.init(0_u32)
       ))
     sdl = result.program.types["LibSDL"].as(LibType)
-    attrs = sdl.link_attributes.not_nil!
+    attrs = sdl.link_annotations.not_nil!
     attrs.size.should eq(2)
     attrs[0].lib.should eq("SDL")
     attrs[1].lib.should eq("SDLMain")
@@ -499,7 +490,7 @@ describe "Semantic: lib" do
       LibSDL.init(0_u32)
       ))
     sdl = result.program.types["LibSDL"].as(LibType)
-    attrs = sdl.link_attributes.not_nil!
+    attrs = sdl.link_annotations.not_nil!
     attrs.size.should eq(2)
     attrs[0].lib.should eq("SDL")
     attrs[1].lib.should eq("SDLMain")
@@ -519,7 +510,7 @@ describe "Semantic: lib" do
       LibSDL.init(0_u32)
       ))
     sdl = result.program.types["LibSDL"].as(LibType)
-    attrs = sdl.link_attributes.not_nil!
+    attrs = sdl.link_annotations.not_nil!
     attrs.size.should eq(1)
     attrs[0].lib.should eq("SDL")
   end
@@ -536,7 +527,7 @@ describe "Semantic: lib" do
       LibSDL.init
       ))
     sdl = result.program.types["LibSDL"].as(LibType)
-    attrs = sdl.link_attributes.not_nil!
+    attrs = sdl.link_annotations.not_nil!
     attrs.size.should eq(1)
     attrs[0].lib.should eq("SDL")
   end
@@ -617,38 +608,38 @@ describe "Semantic: lib" do
       )) { float64 }
   end
 
-  it "errors if invoking to_i32 and got error in that call" do
+  it "errors if invoking to_i32! and got error in that call" do
     assert_error %(
       lib LibFoo
         fun foo(x : Int32) : Float64
       end
 
       class Foo
-        def to_i32
+        def to_i32!
           1 + 'a'
         end
       end
 
       LibFoo.foo Foo.new
       ),
-      "converting from Foo to Int32 by invoking 'to_i32'"
+      "converting from Foo to Int32 by invoking 'to_i32!'"
   end
 
-  it "errors if invoking to_i32 and got wrong type" do
+  it "errors if invoking to_i32! and got wrong type" do
     assert_error %(
       lib LibFoo
         fun foo(x : Int32) : Float64
       end
 
       class Foo
-        def to_i32
+        def to_i32!
           'a'
         end
       end
 
       LibFoo.foo Foo.new
       ),
-      "invoked 'to_i32' to convert from Foo to Int32, but got Char"
+      "invoked 'to_i32!' to convert from Foo to Int32, but got Char"
   end
 
   it "defines lib funs before funs with body" do
@@ -754,7 +745,7 @@ describe "Semantic: lib" do
       "argument 'x' already specified"
   end
 
-  it "errors if missing arugment" do
+  it "errors if missing argument" do
     assert_error %(
       lib LibC
         fun foo(x : Int32, y : UInt8) : Int32
@@ -765,7 +756,7 @@ describe "Semantic: lib" do
       "missing argument: y"
   end
 
-  it "errors if missing arugments" do
+  it "errors if missing arguments" do
     assert_error %(
       lib LibC
         fun foo(x : Int32, y : UInt8, z: Int32) : Int32
@@ -905,7 +896,7 @@ describe "Semantic: lib" do
         fun foo : Int32
       end
       ),
-      "wrong number of arguments for attribute CallConvention (given 2, expected 1)"
+      "wrong number of arguments for annotation CallConvention (given 2, expected 1)"
   end
 
   it "errors if CallConvention argument is not a string" do

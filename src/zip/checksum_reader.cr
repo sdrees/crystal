@@ -24,8 +24,8 @@ module Zip
       @io.peek
     end
 
-    def write(slice : Bytes)
-      raise IO::Error.new "Can't read from Zip::Reader or Zip::File entry"
+    def write(slice : Bytes) : NoReturn
+      raise IO::Error.new "Can't write to Zip::Reader or Zip::File entry"
     end
   end
 end

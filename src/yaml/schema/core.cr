@@ -56,6 +56,8 @@ module YAML::Schema::Core
   # the string had a plain style.
   #
   # ```
+  # require "yaml"
+  #
   # YAML::Schema::Core.parse_scalar("hello") # => "hello"
   # YAML::Schema::Core.parse_scalar("1.2")   # => 1.2
   # YAML::Schema::Core.parse_scalar("false") # => false
@@ -79,8 +81,13 @@ module YAML::Schema::Core
          .starts_with?("-0x")
       value = string.to_i64?(base: 16, prefix: true)
       return value || string
+    when .starts_with?("0."),
+         .starts_with?('.')
+      value = parse_float?(string)
+      return value || string
     when .starts_with?('0')
-      value = string.to_i64?(base: 8, prefix: true)
+      return 0_i64 if string.size == 1
+      value = string.to_i64?(base: 8, prefix: true, leading_zero_is_octal: true)
       return value || string
     when .starts_with?('-'),
          .starts_with?('+')
@@ -103,6 +110,8 @@ module YAML::Schema::Core
   # with a plain style, according to the core schema.
   #
   # ```
+  # require "yaml"
+  #
   # YAML::Schema::Core.reserved_string?("hello") # => false
   # YAML::Schema::Core.reserved_string?("1.2")   # => true
   # YAML::Schema::Core.reserved_string?("false") # => true
@@ -232,7 +241,9 @@ module YAML::Schema::Core
   end
 
   protected def self.parse_int(string, location) : Int64
-    string.to_i64?(underscore: true, prefix: true) ||
+    return 0_i64 if string == "0"
+
+    string.to_i64?(underscore: true, prefix: true, leading_zero_is_octal: true) ||
       raise(YAML::ParseException.new("Invalid int", *location))
   end
 
@@ -305,7 +316,7 @@ module YAML::Schema::Core
   end
 
   private def self.parse_int?(string)
-    string.to_i64?(underscore: true)
+    string.to_i64?(underscore: true, leading_zero_is_octal: true)
   end
 
   private def self.parse_float?(string)
@@ -330,6 +341,6 @@ module YAML::Schema::Core
     # Minimum length is that of YYYY-M-D
     return nil if string.size < 8
 
-    TimeParser.new(string).parse
+    Time::Format::YAML_DATE.parse?(string)
   end
 end

@@ -65,6 +65,8 @@ class CSV
   # non-standard csv cell separators and quote characters.
   #
   # ```
+  # require "csv"
+  #
   # CSV.parse("one,two\nthree")
   # # => [["one", "two"], ["three"]]
   # CSV.parse("one;two\n'three;'", separator: ';', quote_char: '\'')
@@ -79,6 +81,8 @@ class CSV
   # See `CSV.parse` about the *separator* and *quote_char* arguments.
   #
   # ```
+  # require "csv"
+  #
   # CSV.each_row("one,two\nthree") do |row|
   #   puts row
   # end
@@ -101,6 +105,8 @@ class CSV
   # See `CSV.parse` about the *separator* and *quote_char* arguments.
   #
   # ```
+  # require "csv"
+  #
   # rows = CSV.each_row("one,two\nthree")
   # rows.next # => ["one", "two"]
   # rows.next # => ["three"]
@@ -111,16 +117,27 @@ class CSV
 
   # Builds a CSV. This yields a `CSV::Builder` to the given block.
   #
+  # Takes optional *quoting* argument to define quote behavior.
+  #
   # ```
+  # require "csv"
+  #
   # result = CSV.build do |csv|
   #   csv.row "one", "two"
   #   csv.row "three"
   # end
   # result # => "one,two\nthree\n"
+  # result = CSV.build(quoting: CSV::Builder::Quoting::ALL) do |csv|
+  #   csv.row "one", "two"
+  #   csv.row "three"
+  # end
+  # result # => "\"one\",\"two\"\n\"three\"\n"
   # ```
-  def self.build : String
+  #
+  # See: `CSV::Builder::Quoting`
+  def self.build(separator : Char = DEFAULT_SEPARATOR, quote_char : Char = DEFAULT_QUOTE_CHAR, quoting : Builder::Quoting = Builder::Quoting::RFC) : String
     String.build do |io|
-      build(io) { |builder| yield builder }
+      build(io, separator, quote_char, quoting) { |builder| yield builder }
     end
   end
 
@@ -128,6 +145,8 @@ class CSV
   # that writes to the given `IO`.
   #
   # ```
+  # require "csv"
+  #
   # io = IO::Memory.new
   # io.puts "HEADER"
   # CSV.build(io) do |csv|
@@ -136,8 +155,8 @@ class CSV
   # end
   # io.to_s # => "HEADER\none,two\nthree\n"
   # ```
-  def self.build(io : IO)
-    builder = Builder.new(io)
+  def self.build(io : IO, separator : Char = DEFAULT_SEPARATOR, quote_char : Char = DEFAULT_QUOTE_CHAR, quoting : Builder::Quoting = Builder::Quoting::RFC)
+    builder = Builder.new(io, separator, quote_char, quoting)
     yield builder
   end
 

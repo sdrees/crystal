@@ -1,6 +1,5 @@
 require "colorize"
 require "option_parser"
-require "signal"
 
 module Spec
   private COLORS = {
@@ -39,7 +38,7 @@ module Spec
   end
 
   # :nodoc:
-  class AssertionFailed < Exception
+  class SpecError < Exception
     getter file : String
     getter line : Int32
 
@@ -48,10 +47,19 @@ module Spec
     end
   end
 
+  # :nodoc:
+  class AssertionFailed < SpecError
+  end
+
+  # :nodoc:
+  class NestingSpecError < SpecError
+  end
+
   @@aborted = false
 
   # :nodoc:
   def self.abort!
+    @@aborted = true
     exit
   end
 
@@ -169,8 +177,8 @@ module Spec
     start_time = Time.monotonic
     at_exit do
       elapsed_time = Time.monotonic - start_time
-      Spec::RootContext.print_results(elapsed_time)
-      exit 1 unless Spec::RootContext.succeeded
+      Spec::RootContext.finish(elapsed_time, @@aborted)
+      exit 1 unless Spec::RootContext.succeeded && !@@aborted
     end
   end
 end

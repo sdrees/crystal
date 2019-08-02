@@ -173,12 +173,12 @@ describe "Semantic: def" do
 
   it "errors when default value is incompatible with type restriction" do
     assert_error "
-      def foo(x : Int64 = 1)
+      def foo(x : Int64 = 'a')
       end
 
       foo
       ",
-      "can't restrict Int32 to Int64"
+      "can't restrict Char to Int64"
   end
 
   it "types call with global scope" do
@@ -485,5 +485,17 @@ describe "Semantic: def" do
 
       foo
     ), "there's no self in this scope"
+  end
+
+  it "points error at name (#6937)" do
+    ex = assert_error <<-CODE,
+      1.
+        foobar
+      CODE
+      "undefined method",
+      inject_primitives: false
+    ex.line_number.should eq(2)
+    ex.column_number.should eq(3)
+    ex.size.should eq(6)
   end
 end

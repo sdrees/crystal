@@ -10,7 +10,7 @@ require "./openssl/lib_ssl"
 # Recommended ciphers can be taken from:
 # - [OWASP Wiki](https://www.owasp.org/index.php/Transport_Layer_Protection_Cheat_Sheet#Rule_-_Only_Support_Strong_Cryptographic_Ciphers)
 # - [Cipherli.st](https://cipherli.st/)
-# - Full list is available at [OpenSSL Wiki](https://wiki.openssl.org/index.php/Manual:Ciphers%281%29#CIPHER_STRINGS)
+# - A full list is available at the [OpenSSL Docs](https://www.openssl.org/docs/man1.1.0/apps/ciphers.html#CIPHER-STRINGS)
 #
 # Do note that:
 # - Crystal does its best to provide sane configuration defaults (see [Mozilla-Intermediate](https://wiki.mozilla.org/Security/Server_Side_TLS#Intermediate_compatibility_.28default.29)).
@@ -67,14 +67,14 @@ module OpenSSL
   class Error < Exception
     getter! code : LibCrypto::ULong
 
-    def initialize(message = nil, fetched = false)
+    def initialize(message = nil, fetched = false, cause : Exception? = nil)
       @code ||= LibCrypto::ULong.new(0)
 
       if fetched
-        super(message)
+        super(message, cause: cause)
       else
         @code, error = fetch_error_details
-        super(message ? "#{message}: #{error}" : error)
+        super(message ? "#{message}: #{error}" : error, cause: cause)
       end
     end
 
@@ -90,8 +90,8 @@ module OpenSSL
     alias Options = LibSSL::Options
     alias VerifyMode = LibSSL::VerifyMode
     alias ErrorType = LibSSL::SSLError
-    {% if LibSSL::OPENSSL_102 %}
-    alias X509VerifyFlags = LibCrypto::X509VerifyFlags
+    {% if compare_versions(LibSSL::OPENSSL_VERSION, "1.0.2") >= 0 %}
+      alias X509VerifyFlags = LibCrypto::X509VerifyFlags
     {% end %}
 
     class Error < OpenSSL::Error
@@ -110,7 +110,8 @@ module OpenSSL
             when 0
               message = "Unexpected EOF"
             when -1
-              raise Errno.new(func || "OpenSSL")
+              cause = Errno.new(func || "OpenSSL")
+              message = "I/O error"
             else
               message = "Unknown error"
             end
@@ -121,7 +122,7 @@ module OpenSSL
           message = @error.to_s
         end
 
-        super(func ? "#{func}: #{message}" : message, true)
+        super(func ? "#{func}: #{message}" : message, true, cause: cause)
       end
     end
   end
@@ -132,3 +133,5 @@ require "./openssl/ssl/*"
 require "./openssl/digest/*"
 require "./openssl/md5"
 require "./openssl/x509/x509"
+require "./openssl/pkcs5"
+require "./openssl/cipher"

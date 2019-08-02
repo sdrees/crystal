@@ -38,7 +38,9 @@ class String::Builder < IO
     raise "Not implemented"
   end
 
-  def write(slice : Bytes)
+  def write(slice : Bytes) : Nil
+    return if slice.empty?
+
     count = slice.size
     new_bytesize = real_bytesize + count
     if new_bytesize > @capacity
@@ -82,6 +84,7 @@ class String::Builder < IO
         back(1)
       end
     end
+    self
   end
 
   # Moves the write pointer, and the resulting string bytesize,
@@ -94,7 +97,7 @@ class String::Builder < IO
     @bytesize -= amount
   end
 
-  def to_s
+  def to_s : String
     raise "Can only invoke 'to_s' once on String::Builder" if @finished
     @finished = true
 

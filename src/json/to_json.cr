@@ -28,6 +28,10 @@ struct Nil
   def to_json(json : JSON::Builder)
     json.null
   end
+
+  def to_json_object_key
+    ""
+  end
 end
 
 struct Bool
@@ -40,11 +44,19 @@ struct Int
   def to_json(json : JSON::Builder)
     json.number(self)
   end
+
+  def to_json_object_key
+    to_s
+  end
 end
 
 struct Float
   def to_json(json : JSON::Builder)
     json.number(self)
+  end
+
+  def to_json_object_key
+    to_s
   end
 end
 
@@ -52,11 +64,19 @@ class String
   def to_json(json : JSON::Builder)
     json.string(self)
   end
+
+  def to_json_object_key
+    self
+  end
 end
 
 struct Symbol
   def to_json(json : JSON::Builder)
     json.string(to_s)
+  end
+
+  def to_json_object_key
+    to_s
   end
 end
 
@@ -77,10 +97,15 @@ struct Set
 end
 
 class Hash
+  # Serializes this Hash into JSON.
+  #
+  # Keys are serialized by invoking `to_json_object_key` on them.
+  # Values are serialized with the usual `to_json(json : JSON::Builder)`
+  # method.
   def to_json(json : JSON::Builder)
     json.object do
       each do |key, value|
-        json.field key do
+        json.field key.to_json_object_key do
           value.to_json(json)
         end
       end
@@ -123,14 +148,22 @@ struct Enum
 end
 
 struct Time
+  # Emits a string formated according to [RFC 3339](https://tools.ietf.org/html/rfc3339)
+  # ([ISO 8601](http://xml.coverpages.org/ISO-FDIS-8601.pdf) profile).
+  #
+  # The JSON format itself does not specify a time data type, this method just
+  # assumes that a string holding a RFC 3339 time format will be interpreted as
+  # a time value.
+  #
+  # See `#from_json` for reference.
   def to_json(json : JSON::Builder)
-    json.string(Time::Format::ISO_8601_DATE_TIME.format(self))
+    json.string(Time::Format::RFC_3339.format(self, fraction_digits: 0))
   end
 end
 
 # Converter to be used with `JSON.mapping` and `YAML.mapping`
 # to serialize a `Time` instance as the number of seconds
-# since the unix epoch. See `Time.epoch`.
+# since the unix epoch. See `Time#to_unix`.
 #
 # ```
 # require "json"
@@ -147,13 +180,13 @@ end
 # ```
 module Time::EpochConverter
   def self.to_json(value : Time, json : JSON::Builder)
-    json.number(value.epoch)
+    json.number(value.to_unix)
   end
 end
 
 # Converter to be used with `JSON.mapping` and `YAML.mapping`
 # to serialize a `Time` instance as the number of milliseconds
-# since the unix epoch. See `Time.epoch_ms`.
+# since the unix epoch. See `Time#to_unix_ms`.
 #
 # ```
 # require "json"
@@ -170,7 +203,7 @@ end
 # ```
 module Time::EpochMillisConverter
   def self.to_json(value : Time, json : JSON::Builder)
-    json.number(value.epoch_ms)
+    json.number(value.to_unix_ms)
   end
 end
 

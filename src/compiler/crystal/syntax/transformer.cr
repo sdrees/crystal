@@ -180,6 +180,12 @@ module Crystal
       node
     end
 
+    def transform(node : OffsetOf)
+      node.offsetof_type = node.offsetof_type.transform(self)
+      node.instance_var = node.instance_var.transform(self)
+      node
+    end
+
     def transform(node : ReadInstanceVar)
       node.obj = node.obj.transform(self)
       node
@@ -241,6 +247,10 @@ module Crystal
 
     def transform(node : ModuleDef)
       node.body = node.body.transform(self)
+      node
+    end
+
+    def transform(node : AnnotationDef)
       node
     end
 
@@ -544,7 +554,7 @@ module Crystal
       node
     end
 
-    def transform(node : Attribute)
+    def transform(node : Annotation)
       node
     end
 
@@ -553,6 +563,10 @@ module Crystal
     end
 
     def transform(node : MacroLiteral)
+      node
+    end
+
+    def transform(node : MacroVerbatim)
       node
     end
 
@@ -573,7 +587,7 @@ module Crystal
     end
 
     def transform(node : Asm)
-      node.output = node.output.try &.transform(self)
+      node.outputs.try &.each &.transform(self)
       node.inputs.try &.each &.transform(self)
       node
     end

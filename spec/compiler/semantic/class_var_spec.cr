@@ -82,26 +82,6 @@ describe "Semantic: class var" do
       ") { int32 }
   end
 
-  it "says illegal attribute for class var" do
-    assert_error %(
-      class Foo
-        @[Foo]
-        @@foo
-      end
-      ),
-      "illegal attribute"
-  end
-
-  it "says illegal attribute for class var assignment" do
-    assert_error %(
-      class Foo
-        @[Foo]
-        @@foo = 1
-      end
-      ),
-      "illegal attribute"
-  end
-
   it "allows self.class as type var in class body (#537)" do
     assert_type(%(
       class Bar(T)
@@ -241,7 +221,7 @@ describe "Semantic: class var" do
 
       Foo.foo
       ",
-      "Can't infer the type of class variable '@@foo' of Foo"
+      "can't infer the type of class variable '@@foo' of Foo"
   end
 
   it "errors if using class variable at the top level" do
@@ -328,7 +308,7 @@ describe "Semantic: class var" do
         end
       end
       ),
-      "can't use Class as the type of class variable @@class of Foo, use a more specific type"
+      "can't use Class as the type of class variable '@@class' of Foo, use a more specific type"
   end
 
   it "gives correct error when trying to use Int as a class variable type" do
@@ -514,5 +494,20 @@ describe "Semantic: class var" do
 
       Bar.x
       )) { nilable(int32) }
+  end
+
+  it "can access constant from generic metaclass (#3719)" do
+    assert_type(%(
+      class Foo(T)
+        @@x = 0
+
+        def self.inc
+          @@x += 1
+          @@x
+        end
+      end
+
+      Foo(Int32).inc
+      )) { int32 }
   end
 end

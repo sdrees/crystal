@@ -1,3 +1,5 @@
+require "crystal/compiler_rt"
+
 # Int is the base type of all integer types.
 #
 # There are four signed integer types: `Int8`, `Int16`, `Int32` and `Int64`,
@@ -98,13 +100,26 @@ struct Int
   # Raises if *other* is zero, or if *other* is -1 and
   # `self` is signed and is the minimum value for that
   # integer type.
-  def /(other : Int)
+  def //(other : Int)
     check_div_argument other
 
     div = unsafe_div other
     mod = unsafe_mod other
     div -= 1 if other > 0 ? mod < 0 : mod > 0
     div
+  end
+
+  # Divides `self` by *other* as floating point numbers and
+  # applies the floor function to that result.
+  #
+  # The result will be of the same type as `self`.
+  def //(other : Float)
+    self.class.new(to_f // other)
+  end
+
+  @[Deprecated("`Int#/` will return a `Float` in 0.29.0. Use `Int#//` for integer division.")]
+  def /(other : Int)
+    self // other
   end
 
   # Divides `self` by *other* using truncated division.
@@ -157,7 +172,7 @@ struct Int
   def %(other : Int)
     if other == 0
       raise DivisionByZeroError.new
-    elsif (self ^ other) >= 0
+    elsif (self < 0) == (other < 0)
       self.unsafe_mod(other)
     else
       me = self.unsafe_mod(other)
@@ -223,6 +238,12 @@ struct Int
     end
   end
 
+  def <=>(other : Int) : Int32
+    # Override Number#<=> because when comparing
+    # Int vs Int there's no way we can return `nil`
+    self > other ? 1 : (self < other ? -1 : 0)
+  end
+
   def abs
     self >= 0 ? self : -self
   end
@@ -248,6 +269,8 @@ struct Int
   # Raises `ArgumentError` if *exponent* is negative: if this is needed,
   # either use a float base or a float exponent.
   #
+  # Raises `OverflowError` in case of overflow.
+  #
   # ```
   # 2 ** 3  # => 8
   # 2 ** 0  # => 1
@@ -262,8 +285,35 @@ struct Int
     k = self
     while exponent > 0
       result *= k if exponent & 0b1 != 0
-      k *= k
       exponent = exponent.unsafe_shr(1)
+      k *= k if exponent > 0
+    end
+    result
+  end
+
+  # Returns the value of raising `self` to the power of *exponent*.
+  #
+  # Raises `ArgumentError` if *exponent* is negative: if this is needed,
+  # either use a float base or a float exponent.
+  #
+  # Intermediate multiplication will wrap around silently in case of overflow.
+  #
+  # ```
+  # 2 &** 3  # => 8
+  # 2 &** 0  # => 1
+  # 2 &** -1 # ArgumentError
+  # ```
+  def &**(exponent : Int) : self
+    if exponent < 0
+      raise ArgumentError.new "Cannot raise an integer to a negative integer power, use floats for that"
+    end
+
+    result = self.class.new(1)
+    k = self
+    while exponent > 0
+      result &*= k if exponent & 0b1 != 0
+      exponent = exponent.unsafe_shr(1)
+      k &*= k if exponent > 0
     end
     result
   end
@@ -312,7 +362,7 @@ struct Int
   end
 
   def lcm(other : Int)
-    (self * other).abs / gcd(other)
+    (self * other).abs // gcd(other)
   end
 
   def divisible_by?(num)
@@ -353,9 +403,11 @@ struct Int
   end
 
   def upto(to, &block : self ->) : Nil
+    return unless self <= to
     x = self
-    while x <= to
+    while true
       yield x
+      return if x == to
       x += 1
     end
   end
@@ -365,9 +417,11 @@ struct Int
   end
 
   def downto(to, &block : self ->) : Nil
+    return unless self >= to
     x = self
-    while x >= to
+    while true
       yield x
+      return if x == to
       x -= 1
     end
   end
@@ -398,15 +452,15 @@ struct Int
   private DIGITS_UPCASE   = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
   private DIGITS_BASE62   = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
-  def to_s
+  def to_s : String
     to_s(10)
   end
 
-  def to_s(io : IO)
+  def to_s(io : IO) : Nil
     to_s(10, io)
   end
 
-  def to_s(base : Int, upcase : Bool = false)
+  def to_s(base : Int, upcase : Bool = false) : String
     raise ArgumentError.new("Invalid base #{base}") unless 2 <= base <= 36 || base == 62
     raise ArgumentError.new("upcase must be false for base 62") if upcase && base == 62
 
@@ -422,7 +476,7 @@ struct Int
     end
   end
 
-  def to_s(base : Int, io : IO, upcase : Bool = false)
+  def to_s(base : Int, io : IO, upcase : Bool = false) : Nil
     raise ArgumentError.new("Invalid base #{base}") unless 2 <= base <= 36 || base == 62
     raise ArgumentError.new("upcase must be false for base 62") if upcase && base == 62
 
@@ -467,25 +521,6 @@ struct Int
     yield ptr, count
   end
 
-  def inspect(io)
-    type = case self
-           when Int8    then "_i8"
-           when Int16   then "_i16"
-           when Int32   then ""
-           when Int64   then "_i64"
-           when Int128  then "_i128"
-           when UInt8   then "_u8"
-           when UInt16  then "_u16"
-           when UInt32  then "_u32"
-           when UInt64  then "_u64"
-           when UInt128 then "_u128"
-           else              raise "BUG: impossible"
-           end
-
-    to_s(io)
-    io << type
-  end
-
   # Writes this integer to the given *io* in the given *format*.
   #
   # See also: `IO#write_bytes`.
@@ -508,6 +543,9 @@ struct Int
   # ```
   abstract def popcount
 
+  # Returns the number of trailing `0`-bits.
+  abstract def trailing_zeros_count
+
   private class TimesIterator(T)
     include Iterator(T)
 
@@ -526,11 +564,6 @@ struct Int
         stop
       end
     end
-
-    def rewind
-      @index = T.zero
-      self
-    end
   end
 
   private class UptoIterator(T, N)
@@ -539,24 +572,19 @@ struct Int
     @from : T
     @to : N
     @current : T
+    @done : Bool
 
     def initialize(@from : T, @to : N)
       @current = @from
+      @done = !(@from <= @to)
     end
 
     def next
-      if @current > @to
-        stop
-      else
-        value = @current
-        @current += 1
-        value
-      end
-    end
-
-    def rewind
-      @current = @from
-      self
+      return stop if @done
+      value = @current
+      @done = @current == @to
+      @current += 1 unless @done
+      value
     end
   end
 
@@ -566,24 +594,19 @@ struct Int
     @from : T
     @to : N
     @current : T
+    @done : Bool
 
     def initialize(@from : T, @to : N)
       @current = @from
+      @done = !(@from >= @to)
     end
 
     def next
-      if @current < @to
-        stop
-      else
-        value = @current
-        @current -= 1
-        value
-      end
-    end
-
-    def rewind
-      @current = @from
-      self
+      return stop if @done
+      value = @current
+      @done = @current == @to
+      @current -= 1 unless @done
+      value
     end
   end
 end
@@ -597,12 +620,26 @@ struct Int8
     value.to_i8
   end
 
+  # Returns an `Int8` by invoking `to_i8!` on *value*.
+  def self.new!(value)
+    value.to_i8!
+  end
+
   def -
     0_i8 - self
   end
 
   def popcount
     Intrinsics.popcount8(self)
+  end
+
+  # Returns the number of leading `0`-bits.
+  def leading_zeros_count
+    Intrinsics.countleading8(self, false)
+  end
+
+  def trailing_zeros_count
+    Intrinsics.counttrailing8(self, false)
   end
 
   def clone
@@ -619,12 +656,26 @@ struct Int16
     value.to_i16
   end
 
+  # Returns an `Int16` by invoking `to_i16!` on *value*.
+  def self.new!(value)
+    value.to_i16!
+  end
+
   def -
     0_i16 - self
   end
 
   def popcount
     Intrinsics.popcount16(self)
+  end
+
+  # Returns the number of leading `0`-bits.
+  def leading_zeros_count
+    Intrinsics.countleading16(self, false)
+  end
+
+  def trailing_zeros_count
+    Intrinsics.counttrailing16(self, false)
   end
 
   def clone
@@ -641,12 +692,26 @@ struct Int32
     value.to_i32
   end
 
+  # Returns an `Int32` by invoking `to_i32!` on *value*.
+  def self.new!(value)
+    value.to_i32!
+  end
+
   def -
     0 - self
   end
 
   def popcount
     Intrinsics.popcount32(self)
+  end
+
+  # Returns the number of leading `0`-bits.
+  def leading_zeros_count
+    Intrinsics.countleading32(self, false)
+  end
+
+  def trailing_zeros_count
+    Intrinsics.counttrailing32(self, false)
   end
 
   def clone
@@ -663,12 +728,26 @@ struct Int64
     value.to_i64
   end
 
+  # Returns an `Int64` by invoking `to_i64!` on *value*.
+  def self.new!(value)
+    value.to_i64!
+  end
+
   def -
     0_i64 - self
   end
 
   def popcount
     Intrinsics.popcount64(self)
+  end
+
+  # Returns the number of leading `0`-bits.
+  def leading_zeros_count
+    Intrinsics.countleading64(self, false)
+  end
+
+  def trailing_zeros_count
+    Intrinsics.counttrailing64(self, false)
   end
 
   def clone
@@ -686,6 +765,11 @@ struct Int128
     value.to_i128
   end
 
+  # Returns an `Int128` by invoking `to_i128!` on *value*.
+  def self.new!(value)
+    value.to_i128!
+  end
+
   def -
     # TODO: use 0_i128 - self
     Int128.new(0) - self
@@ -693,6 +777,15 @@ struct Int128
 
   def popcount
     Intrinsics.popcount128(self)
+  end
+
+  # Returns the number of leading `0`-bits.
+  def leading_zeros_count
+    Intrinsics.countleading128(self, false)
+  end
+
+  def trailing_zeros_count
+    Intrinsics.counttrailing128(self, false)
   end
 
   def clone
@@ -709,12 +802,26 @@ struct UInt8
     value.to_u8
   end
 
+  # Returns an `UInt8` by invoking `to_u8!` on *value*.
+  def self.new!(value)
+    value.to_u8!
+  end
+
   def abs
     self
   end
 
   def popcount
     Intrinsics.popcount8(self)
+  end
+
+  # Returns the number of leading `0`-bits.
+  def leading_zeros_count
+    Intrinsics.countleading8(self, false)
+  end
+
+  def trailing_zeros_count
+    Intrinsics.counttrailing8(self, false)
   end
 
   def clone
@@ -731,12 +838,26 @@ struct UInt16
     value.to_u16
   end
 
+  # Returns an `UInt16` by invoking `to_u16!` on *value*.
+  def self.new!(value)
+    value.to_u16!
+  end
+
   def abs
     self
   end
 
   def popcount
     Intrinsics.popcount16(self)
+  end
+
+  # Returns the number of leading `0`-bits.
+  def leading_zeros_count
+    Intrinsics.countleading16(self, false)
+  end
+
+  def trailing_zeros_count
+    Intrinsics.counttrailing16(self, false)
   end
 
   def clone
@@ -753,12 +874,26 @@ struct UInt32
     value.to_u32
   end
 
+  # Returns an `UInt32` by invoking `to_u32!` on *value*.
+  def self.new!(value)
+    value.to_u32!
+  end
+
   def abs
     self
   end
 
   def popcount
     Intrinsics.popcount32(self)
+  end
+
+  # Returns the number of leading `0`-bits.
+  def leading_zeros_count
+    Intrinsics.countleading32(self, false)
+  end
+
+  def trailing_zeros_count
+    Intrinsics.counttrailing32(self, false)
   end
 
   def clone
@@ -775,12 +910,26 @@ struct UInt64
     value.to_u64
   end
 
+  # Returns an `UInt64` by invoking `to_u64!` on *value*.
+  def self.new!(value)
+    value.to_u64!
+  end
+
   def abs
     self
   end
 
   def popcount
     Intrinsics.popcount64(self)
+  end
+
+  # Returns the number of leading `0`-bits.
+  def leading_zeros_count
+    Intrinsics.countleading64(self, false)
+  end
+
+  def trailing_zeros_count
+    Intrinsics.counttrailing64(self, false)
   end
 
   def clone
@@ -798,12 +947,26 @@ struct UInt128
     value.to_u128
   end
 
+  # Returns an `UInt128` by invoking `to_u128!` on *value*.
+  def self.new!(value)
+    value.to_u128!
+  end
+
   def abs
     self
   end
 
   def popcount
     Intrinsics.popcount128(self)
+  end
+
+  # Returns the number of leading `0`-bits.
+  def leading_zeros_count
+    Intrinsics.countleading128(self, false)
+  end
+
+  def trailing_zeros_count
+    Intrinsics.counttrailing128(self, false)
   end
 
   def clone

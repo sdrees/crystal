@@ -66,7 +66,7 @@ describe "Code gen: alias" do
         if n == 0
           1
         else
-          foo(n - 1).as(Foo)
+          foo(n &- 1).as(Foo)
         end
       end
 
@@ -83,7 +83,7 @@ describe "Code gen: alias" do
         alias Foo = Moo
       end
       ))
-    result.program.link_attributes
+    result.program.link_annotations
   end
 
   it "doesn't crash on cast to as recursive alias (#639)" do

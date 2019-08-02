@@ -28,7 +28,7 @@ describe HTTP::Headers do
     headers = HTTP::Headers{"FOO_BAR" => "bar", "Foobar-foo" => "baz"}
     serialized = String.build do |io|
       headers.each do |name, values|
-        io << name << ": " << values.first << ";"
+        io << name << ": " << values.first << ';'
       end
     end
 
@@ -41,11 +41,6 @@ describe HTTP::Headers do
 
     headers["Foo"] = "bar"
     headers["foo"]?.should eq("bar")
-  end
-
-  it "fetches" do
-    headers = HTTP::Headers{"Foo" => "bar"}
-    headers.fetch("foo").should eq("bar")
   end
 
   it "fetches with default value" do
@@ -163,6 +158,21 @@ describe HTTP::Headers do
   it "matches word with comma separated value, partial match" do
     headers = HTTP::Headers{"foo" => "bar, bazo, baz"}
     headers.includes_word?("foo", "baz").should be_true
+  end
+
+  it "doesn't match word with comma separated value, partial match" do
+    headers = HTTP::Headers{"foo" => "bar, bazo"}
+    headers.includes_word?("foo", "baz").should be_false
+  end
+
+  it "matches word with comma separated value, partial match (array)" do
+    headers = HTTP::Headers{"foo" => ["foo", "baz, bazo"]}
+    headers.includes_word?("foo", "baz").should be_true
+  end
+
+  it "doesn't match word with comma separated value, partial match (array)" do
+    headers = HTTP::Headers{"foo" => ["foo", "bar, bazo"]}
+    headers.includes_word?("foo", "baz").should be_false
   end
 
   it "matches word among headers" do

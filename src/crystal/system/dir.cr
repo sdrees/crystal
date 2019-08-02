@@ -3,14 +3,14 @@ module Crystal::System::Dir
   # Returns a new handle to an iterator of entries inside *path*.
   # def self.open(path : String) : Handle
 
-  # Return the next directory entry in the iterator represented by *handle*, or
+  # Returns the next directory entry in the iterator represented by *handle*, or
   # `nil` if iteration is complete.
   # def self.next(handle : Handle) : String?
 
   # Rewinds the iterator to the beginning of the directory.
   # def self.rewind(handle : Handle) : Nil
 
-  # Closes *handle*, freeing it's resources.
+  # Closes *handle*, freeing its resources.
   # def self.close(handle : Handle) : Nil
 
   # Returns the current working directory of the application.
@@ -29,6 +29,8 @@ end
 
 {% if flag?(:unix) %}
   require "./unix/dir"
+{% elsif flag?(:win32) %}
+  require "./win32/dir"
 {% else %}
   {% raise "No implementation of Crystal::System::Dir available" %}
 {% end %}

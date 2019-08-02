@@ -21,6 +21,9 @@ describe BigDecimal do
     BigDecimal.new("42.0123")
       .should eq(BigDecimal.new(BigInt.new(420123), 4))
 
+    BigDecimal.new("42_42_42_24.0123_456_789")
+      .should eq(BigDecimal.new(BigInt.new(424242240123456789), 10))
+
     BigDecimal.new("0.0")
       .should eq(BigDecimal.new(BigInt.new(0)))
 
@@ -65,6 +68,9 @@ describe BigDecimal do
 
     BigDecimal.new(BigDecimal.new(2))
       .should eq(BigDecimal.new(2.to_big_i))
+
+    BigDecimal.new(BigRational.new(1, 2))
+      .should eq(BigDecimal.new(BigInt.new(5), 1))
   end
 
   it "raises InvalidBigDecimalException when initializing from invalid input" do
@@ -141,7 +147,19 @@ describe BigDecimal do
     expect_raises(DivisionByZeroError) do
       BigDecimal.new(-1) / BigDecimal.new(0)
     end
+
+    expect_raises(DivisionByZeroError) do
+      BigDecimal.new(0) // BigDecimal.new(0)
+    end
+    expect_raises(DivisionByZeroError) do
+      BigDecimal.new(1) // BigDecimal.new(0)
+    end
+    expect_raises(DivisionByZeroError) do
+      BigDecimal.new(-1) // BigDecimal.new(0)
+    end
+
     BigDecimal.new(1).should eq(BigDecimal.new(1) / BigDecimal.new(1))
+    BigDecimal.new(10).should eq(BigDecimal.new(100, 1) / BigDecimal.new(100000000, 8))
     BigDecimal.new(5.to_big_i, 1_u64).should eq(BigDecimal.new(1) / BigDecimal.new(2))
     BigDecimal.new(-5.to_big_i, 1_u64).should eq(BigDecimal.new(1) / BigDecimal.new(-2))
     BigDecimal.new(-5.to_big_i, 4_u64).should eq(BigDecimal.new(1) / BigDecimal.new(-2000))
@@ -153,6 +171,18 @@ describe BigDecimal do
     BigDecimal.new(500.to_big_i, 0).should eq(BigDecimal.new(-1000) / BigDecimal.new(-2))
     BigDecimal.new(0).should eq(BigDecimal.new(0) / BigDecimal.new(1))
     BigDecimal.new("3333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333".to_big_i, 100_u64).should eq(BigDecimal.new(1) / BigDecimal.new(3))
+
+    BigDecimal.new(0).should eq(BigDecimal.new(1) // BigDecimal.new(2))
+    BigDecimal.new(-1).should eq(BigDecimal.new(1) // BigDecimal.new(-2))
+    BigDecimal.new(-1).should eq(BigDecimal.new(1) // BigDecimal.new(-2000))
+    BigDecimal.new(-500).should eq(BigDecimal.new(1000) // BigDecimal.new(-2))
+    BigDecimal.new(-500).should eq(BigDecimal.new(-1000) // BigDecimal.new(2))
+    BigDecimal.new(500).should eq(BigDecimal.new(-1000) // BigDecimal.new(-2))
+    BigDecimal.new(0).should eq(BigDecimal.new(-1) // BigDecimal.new(-2))
+    BigDecimal.new(0).should eq(BigDecimal.new(-1) // BigDecimal.new(-2000))
+    BigDecimal.new(500).should eq(BigDecimal.new(-1000) // BigDecimal.new(-2))
+    BigDecimal.new(0).should eq(BigDecimal.new(0) // BigDecimal.new(1))
+    BigDecimal.new(0).should eq(BigDecimal.new(1) // BigDecimal.new(3))
 
     BigDecimal.new(33333.to_big_i, 5_u64).should eq(BigDecimal.new(1).div(BigDecimal.new(3), 5))
     BigDecimal.new(33.to_big_i, 5_u64).should eq(BigDecimal.new(1).div(BigDecimal.new(3000), 5))
@@ -174,6 +204,12 @@ describe BigDecimal do
     (3 / 2.to_big_d).should eq(BigDecimal.new("1.5"))
   end
 
+  it "exponentiates" do
+    result = "12.34".to_big_d ** 5
+    result.should be_a(BigDecimal)
+    result.to_s.should eq("286138.1721051424")
+  end
+
   it "can be converted from other types" do
     1.to_big_d.should eq (BigDecimal.new(1))
     "1.5".to_big_d.should eq (BigDecimal.new(15, 1))
@@ -181,6 +217,7 @@ describe BigDecimal do
     BigInt.new(15).to_big_d.should eq (BigDecimal.new(15, 0))
     1.5.to_big_d.should eq (BigDecimal.new(15, 1))
     1.5.to_big_f.to_big_d.should eq (BigDecimal.new(15, 1))
+    1.5.to_big_r.to_big_d.should eq(BigDecimal.new(15, 1))
   end
 
   it "can be converted from scientific notation" do
@@ -243,6 +280,12 @@ describe BigDecimal do
 
     (BigDecimal.new("6.5") > 7).should be_false
     (BigDecimal.new("7.5") > 6).should be_true
+
+    BigDecimal.new("0.5").should eq(BigRational.new(1, 2))
+    BigDecimal.new("0.25").should eq(BigDecimal.new("0.25"))
+
+    BigRational.new(1, 2).should eq(BigDecimal.new("0.5"))
+    BigRational.new(1, 4).should eq(BigDecimal.new("0.25"))
   end
 
   it "keeps precision" do
@@ -309,6 +352,21 @@ describe BigDecimal do
     bd2.to_f.should eq -0.00123
     bd3.to_f.should eq 123.0
     bd4.to_f.should eq -123.0
+
+    bd1.to_i!.should eq 0
+    bd2.to_i!.should eq 0
+    bd3.to_i!.should eq 123
+    bd4.to_i!.should eq -123
+
+    bd1.to_u!.should eq 0
+    bd2.to_u!.should eq 0
+    bd3.to_u!.should eq 123
+    bd4.to_u!.should eq 123
+
+    bd1.to_f!.should eq 0.00123
+    bd2.to_f!.should eq -0.00123
+    bd3.to_f!.should eq 123.0
+    bd4.to_f!.should eq -123.0
   end
 
   it "hashes" do
@@ -364,5 +422,42 @@ describe BigDecimal do
 
     negative_one.normalize_quotient(negative_one, positive_ten).should eq(positive_ten)
     negative_one.normalize_quotient(negative_one, negative_ten).should eq(negative_ten)
+  end
+
+  describe "#ceil" do
+    it { 2.0.to_big_d.ceil.should eq(2) }
+    it { 2.1.to_big_d.ceil.should eq(3) }
+    it { 2.9.to_big_d.ceil.should eq(3) }
+
+    it { 2.01.to_big_d.ceil.should eq(3) }
+    it { 2.11.to_big_d.ceil.should eq(3) }
+    it { 2.91.to_big_d.ceil.should eq(3) }
+
+    it { -2.01.to_big_d.ceil.should eq(-2) }
+    it { -2.91.to_big_d.ceil.should eq(-2) }
+  end
+
+  describe "#floor" do
+    it { 2.1.to_big_d.floor.should eq(2) }
+    it { 2.9.to_big_d.floor.should eq(2) }
+    it { -2.9.to_big_d.floor.should eq(-3) }
+
+    it { 2.11.to_big_d.floor.should eq(2) }
+    it { 2.91.to_big_d.floor.should eq(2) }
+    it { -2.91.to_big_d.floor.should eq(-3) }
+  end
+
+  describe "#trunc" do
+    it { 2.1.to_big_d.trunc.should eq(2) }
+    it { 2.9.to_big_d.trunc.should eq(2) }
+    it { -2.9.to_big_d.trunc.should eq(-2) }
+
+    it { 2.11.to_big_d.trunc.should eq(2) }
+    it { 2.91.to_big_d.trunc.should eq(2) }
+    it { -2.91.to_big_d.trunc.should eq(-2) }
+  end
+
+  describe "#inspect" do
+    it { "123".to_big_d.inspect.should eq("123") }
   end
 end

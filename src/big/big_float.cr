@@ -1,4 +1,5 @@
 require "c/string"
+require "big"
 
 # A `BigFloat` can represent arbitrarily large floats.
 #
@@ -15,6 +16,8 @@ struct BigFloat < Float
   def initialize(str : String)
     # Strip leading '+' char to smooth out cases with strings like "+123"
     str = str.lchop('+')
+    # Strip '_' to make it compatible with int literals like "1_000_000"
+    str = str.delete('_')
     if LibGMP.mpf_init_set_str(out @mpf, str, 10) == -1
       raise ArgumentError.new("Invalid BigFloat: #{str.inspect}")
     end
@@ -137,6 +140,10 @@ struct BigFloat < Float
     end
   end
 
+  def //(other : Number)
+    (self / other).floor
+  end
+
   def **(other : Int)
     BigFloat.new { |mpf| LibGMP.mpf_pow_ui(mpf, self, other.to_u64) }
   end
@@ -169,6 +176,18 @@ struct BigFloat < Float
     to_f64
   end
 
+  def to_f32!
+    to_f64.to_f32!
+  end
+
+  def to_f64!
+    to_f64
+  end
+
+  def to_f!
+    to_f64!
+  end
+
   def to_big_f
     self
   end
@@ -193,6 +212,26 @@ struct BigFloat < Float
     to_i32
   end
 
+  def to_i!
+    to_i32!
+  end
+
+  def to_i8!
+    LibGMP.mpf_get_si(self).to_i8!
+  end
+
+  def to_i16!
+    LibGMP.mpf_get_si(self).to_i16!
+  end
+
+  def to_i32!
+    LibGMP.mpf_get_si(self).to_i32!
+  end
+
+  def to_i64!
+    LibGMP.mpf_get_si(self)
+  end
+
   def to_u64
     LibGMP.mpf_get_ui(self)
   end
@@ -213,32 +252,55 @@ struct BigFloat < Float
     to_u32
   end
 
+  def to_u!
+    to_u32!
+  end
+
+  def to_u8!
+    LibGMP.mpf_get_ui(self).to_u8!
+  end
+
+  def to_u16!
+    LibGMP.mpf_get_ui(self).to_u16!
+  end
+
+  def to_u32!
+    LibGMP.mpf_get_ui(self).to_u32!
+  end
+
+  def to_u64!
+    LibGMP.mpf_get_ui(self)
+  end
+
   def to_unsafe
     mpf
   end
 
-  def inspect(io)
-    to_s(io)
-    io << "_big_f"
-  end
-
-  def to_s(io : IO)
+  def to_s(io : IO) : Nil
     cstr = LibGMP.mpf_get_str(nil, out expptr, 10, 0, self)
     length = LibC.strlen(cstr)
+    decimal_set = false
     io << '-' if self < 0
     if expptr == 0
       io << 0
     elsif expptr < 0
       io << 0 << '.'
+      decimal_set = true
       expptr.abs.times { io << 0 }
     end
     expptr += 1 if self < 0
     length.times do |i|
       next if cstr[i] == 45 # '-'
-      io << '.' if i == expptr
+      if i == expptr
+        io << '.'
+        decimal_set = true
+      end
       io << cstr[i].unsafe_chr
     end
     (expptr - length).times { io << 0 } if expptr > 0
+    if !decimal_set
+      io << ".0"
+    end
   end
 
   def clone
@@ -273,12 +335,22 @@ struct Number
     to_big_f / other
   end
 
+  def //(other : BigFloat)
+    to_big_f // other
+  end
+
   def to_big_f
     BigFloat.new(self)
   end
 end
 
 class String
+  # Converts `self` to a `BigFloat`.
+  #
+  # ```
+  # require "big"
+  # "1234.0".to_big_f
+  # ```
   def to_big_f
     BigFloat.new(self)
   end
@@ -297,6 +369,12 @@ module Math
     {frac, exp}
   end
 
+  # Returns the sqrt of a `BigFloat`.
+  #
+  # ```
+  # require "big"
+  # Math.sqrt((1000_000_000_0000.to_big_f*1000_000_000_00000.to_big_f))
+  # ```
   def sqrt(value : BigFloat)
     BigFloat.new { |mpf| LibGMP.mpf_sqrt(mpf, value) }
   end

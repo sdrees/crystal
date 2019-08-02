@@ -4,13 +4,46 @@ require "semantic_version"
 
 module Crystal
   class MacroInterpreter
+    private def find_source_file(filename)
+      # Support absolute paths
+      if filename.starts_with?('/')
+        filename = "#{filename}.cr" unless filename.ends_with?(".cr")
+
+        if File.exists?(filename)
+          unless File.file?(filename)
+            return yield "#{filename.inspect} is not a file"
+          end
+        else
+          return yield "can't find file #{filename.inspect}"
+        end
+      else
+        begin
+          relative_to = @location.try &.original_filename
+          found_filenames = @program.find_in_path(filename, relative_to)
+        rescue ex
+          return yield ex.message
+        end
+
+        unless found_filenames
+          return yield "can't find file #{filename.inspect}"
+        end
+
+        if found_filenames.size > 1
+          return yield "#{filename.inspect} is a directory"
+        end
+
+        filename = found_filenames.first
+      end
+      filename
+    end
+
     def interpret_top_level_call(node)
       interpret_top_level_call?(node) ||
         node.raise("undefined macro method: '#{node.name}'")
     end
 
     def interpret_top_level_call?(node)
-      # Please order method names in lexicographical order, because OCD
+      # Please order method names in lexicographical order
       case node.name
       when "compare_versions"
         interpret_compare_versions(node)
@@ -20,16 +53,22 @@ module Crystal
         interpret_env(node)
       when "flag?"
         interpret_flag?(node)
-      when "puts", "p"
+      when "puts"
         interpret_puts(node)
-      when "pp"
-        interpret_pp(node)
+      when "p", "pp"
+        interpret_p(node)
+      when "p!", "pp!"
+        interpret_pp!(node)
       when "skip_file"
         interpret_skip_file(node)
       when "system", "`"
         interpret_system(node)
       when "raise"
         interpret_raise(node)
+      when "read_file"
+        interpret_read_file(node)
+      when "read_file?"
+        interpret_read_file(node, nilable: true)
       when "run"
         interpret_run(node)
       else
@@ -116,13 +155,28 @@ module Crystal
     def interpret_puts(node)
       node.args.each do |arg|
         arg.accept self
+        last = @last
+
+        # The only difference in macro land between `p` and `puts` is that
+        # `puts` with a string literal shouldn't show the string quotes
+        last = last.value if last.is_a?(StringLiteral)
+
+        @program.stdout.puts last
+      end
+
+      @last = Nop.new
+    end
+
+    def interpret_p(node)
+      node.args.each do |arg|
+        arg.accept self
         @program.stdout.puts @last
       end
 
       @last = Nop.new
     end
 
-    def interpret_pp(node)
+    def interpret_pp!(node)
       strings = [] of {String, String}
 
       node.args.each do |arg|
@@ -139,7 +193,7 @@ module Crystal
     end
 
     def interpret_skip_file(node)
-      raise SkipMacroException.new(@str.to_s)
+      raise SkipMacroException.new(@str.to_s, macro_expansion_pragmas)
     end
 
     def interpret_system(node)
@@ -163,43 +217,32 @@ module Crystal
       macro_raise(node, node.args, self)
     end
 
+    def interpret_read_file(node, nilable = false)
+      unless node.args.size == 1
+        node.wrong_number_of_arguments "macro call '#{node.name}'", node.args.size, 1
+      end
+
+      node.args[0].accept self
+      filename = @last.to_macro_id
+
+      begin
+        @last = StringLiteral.new(File.read(filename))
+      rescue ex
+        node.raise ex.to_s unless nilable
+        @last = NilLiteral.new
+      end
+    end
+
     def interpret_run(node)
       if node.args.size == 0
         node.wrong_number_of_arguments "macro call 'run'", 0, "1+"
       end
 
       node.args.first.accept self
-      filename = @last.to_macro_id
-      original_filename = filename
+      original_filename = @last.to_macro_id
 
-      # Support absolute paths
-      if filename.starts_with?("/")
-        filename = "#{filename}.cr" unless filename.ends_with?(".cr")
-
-        if File.exists?(filename)
-          unless File.file?(filename)
-            node.raise "error executing macro run: '#{filename}' is not a file"
-          end
-        else
-          node.raise "error executing macro run: can't find file '#{filename}'"
-        end
-      else
-        begin
-          relative_to = @location.try &.original_filename
-          found_filenames = @program.find_in_path(filename, relative_to)
-        rescue ex
-          node.raise "error executing macro run: #{ex.message}"
-        end
-
-        unless found_filenames
-          node.raise "error executing macro run: can't find file '#{filename}'"
-        end
-
-        if found_filenames.size > 1
-          node.raise "error executing macro run: '#{filename}' is a directory"
-        end
-
-        filename = found_filenames.first
+      filename = find_source_file(original_filename) do |error_message|
+        node.raise "error executing macro 'run': #{error_message}"
       end
 
       run_args = [] of String
@@ -396,7 +439,9 @@ module Crystal
       when "<="
         bool_bin_op(method, args) { |me, other| me <= other }
       when "<=>"
-        num_bin_op(method, args) { |me, other| me <=> other }
+        num_bin_op(method, args) do |me, other|
+          (me <=> other) || (return NilLiteral.new)
+        end
       when "+"
         if args.empty?
           self
@@ -418,6 +463,8 @@ module Crystal
         num_bin_op(method, args) { |me, other| me * other }
       when "/"
         num_bin_op(method, args) { |me, other| me / other }
+      when "//"
+        num_bin_op(method, args) { |me, other| me // other }
       when "**"
         num_bin_op(method, args) { |me, other| me ** other }
       when "%"
@@ -601,7 +648,7 @@ module Crystal
       when "capitalize"
         interpret_argless_method(method, args) { StringLiteral.new(@value.capitalize) }
       when "chars"
-        interpret_argless_method(method, args) { ArrayLiteral.map(@value.chars) { |value| CharLiteral.new(value) } }
+        interpret_argless_method(method, args) { ArrayLiteral.map(@value.chars, Path.global("Char")) { |value| CharLiteral.new(value) } }
       when "chomp"
         interpret_argless_method(method, args) { StringLiteral.new(@value.chomp) }
       when "downcase"
@@ -622,8 +669,8 @@ module Crystal
         end
       when "gsub"
         interpret_two_args_method(method, args) do |first, second|
-          raise "first arguent to StringLiteral#gsub must be a regex, not #{first.class_desc}" unless first.is_a?(RegexLiteral)
-          raise "second arguent to StringLiteral#gsub must be a string, not #{second.class_desc}" unless second.is_a?(StringLiteral)
+          raise "first argument to StringLiteral#gsub must be a regex, not #{first.class_desc}" unless first.is_a?(RegexLiteral)
+          raise "second argument to StringLiteral#gsub must be a string, not #{second.class_desc}" unless second.is_a?(StringLiteral)
 
           regex_value = first.value
           if regex_value.is_a?(StringLiteral)
@@ -651,11 +698,11 @@ module Crystal
       when "size"
         interpret_argless_method(method, args) { NumberLiteral.new(@value.size) }
       when "lines"
-        interpret_argless_method(method, args) { ArrayLiteral.map(@value.lines) { |value| StringLiteral.new(value) } }
+        interpret_argless_method(method, args) { ArrayLiteral.map(@value.lines, Path.global("String")) { |value| StringLiteral.new(value) } }
       when "split"
         case args.size
         when 0
-          ArrayLiteral.map(@value.split) { |value| StringLiteral.new(value) }
+          ArrayLiteral.map(@value.split, Path.global("String")) { |value| StringLiteral.new(value) }
         when 1
           first_arg = args.first
           case first_arg
@@ -667,9 +714,19 @@ module Crystal
             splitter = first_arg.to_s
           end
 
-          ArrayLiteral.map(@value.split(splitter)) { |value| StringLiteral.new(value) }
+          ArrayLiteral.map(@value.split(splitter), Path.global("String")) { |value| StringLiteral.new(value) }
         else
           wrong_number_of_arguments "StringLiteral#split", args.size, "0..1"
+        end
+      when "count"
+        interpret_one_arg_method(method, args) do |arg|
+          case arg
+          when CharLiteral
+            chr = arg.value
+          else
+            raise "StringLiteral#count expects char, not #{arg.class_desc}"
+          end
+          NumberLiteral.new(@value.count(chr))
         end
       when "starts_with?"
         interpret_one_arg_method(method, args) do |arg|
@@ -699,14 +756,15 @@ module Crystal
         end
 
         if value
-          NumberLiteral.new(value)
+          NumberLiteral.new(value.to_s, :i32)
         else
           raise "StringLiteral#to_i: #{@value} is not an integer"
         end
       when "tr"
         interpret_two_args_method(method, args) do |first, second|
-          raise "first arguent to StringLiteral#tr must be a string, not #{first.class_desc}" unless first.is_a?(StringLiteral)
-          raise "second arguent to StringLiteral#tr must be a string, not #{second.class_desc}" unless second.is_a?(StringLiteral)
+          raise "first argument to StringLiteral#tr must be a string, not #{first.class_desc}" unless first.is_a?(StringLiteral)
+          raise "second argument to StringLiteral#tr must be a string, not #{second.class_desc}" unless second.is_a?(StringLiteral)
+
           StringLiteral.new(@value.tr(first.value, second.value))
         end
       when "underscore"
@@ -751,7 +809,7 @@ module Crystal
           self
         end
       else
-        value = intepret_array_or_tuple_method(self, ArrayLiteral, method, args, block, interpreter)
+        value = interpret_array_or_tuple_method(self, ArrayLiteral, method, args, block, interpreter)
         value || super
       end
     end
@@ -910,7 +968,7 @@ module Crystal
           when StringLiteral
             key = key.value
           else
-            return NilLiteral.new
+            raise "argument to [] must be a symbol or string, not #{key.class_desc}:\n\n#{key}"
           end
 
           entry = entries.find &.key.==(key)
@@ -963,7 +1021,7 @@ module Crystal
 
   class TupleLiteral
     def interpret(method, args, block, interpreter)
-      value = intepret_array_or_tuple_method(self, TupleLiteral, method, args, block, interpreter)
+      value = interpret_array_or_tuple_method(self, TupleLiteral, method, args, block, interpreter)
       value || super
     end
   end
@@ -1036,7 +1094,7 @@ module Crystal
           options << :i if @options.ignore_case?
           options << :m if @options.multiline?
           options << :x if @options.extended?
-          ArrayLiteral.map(options) { |opt| SymbolLiteral.new(opt.to_s) }
+          ArrayLiteral.map(options, Path.global("Symbol")) { |opt| SymbolLiteral.new(opt.to_s) }
         end
       else
         super
@@ -1044,7 +1102,7 @@ module Crystal
     end
   end
 
-  class MetaVar < ASTNode
+  class MetaMacroVar < ASTNode
     def to_macro_id
       @name
     end
@@ -1060,6 +1118,24 @@ module Crystal
           else
             NilLiteral.new
           end
+        end
+      when "default_value"
+        interpret_argless_method(method, args) do
+          default_value || NilLiteral.new
+        end
+      when "has_default_value?"
+        interpret_argless_method(method, args) do
+          BoolLiteral.new(!!default_value)
+        end
+      when "annotation"
+        fetch_annotation(self, method, args) do |type|
+          self.var.annotation(type)
+        end
+      when "annotations"
+        fetch_annotation(self, method, args) do |type|
+          annotations = self.var.annotations(type)
+          return ArrayLiteral.new if annotations.nil?
+          ArrayLiteral.map(annotations, &.itself)
         end
       else
         super
@@ -1190,6 +1266,10 @@ module Crystal
   class Union
     def interpret(method, args, block, interpreter)
       case method
+      when "resolve"
+        interpret_argless_method(method, args) { interpreter.resolve(self) }
+      when "resolve?"
+        interpret_argless_method(method, args) { interpreter.resolve?(self) || NilLiteral.new }
       when "types"
         interpret_argless_method(method, args) { ArrayLiteral.new(@types) }
       else
@@ -1230,6 +1310,8 @@ module Crystal
         interpret_argless_method(method, args) { @double_splat || Nop.new }
       when "block_arg"
         interpret_argless_method(method, args) { @block_arg || Nop.new }
+      when "accepts_block?"
+        interpret_argless_method(method, args) { BoolLiteral.new(@yields != nil) }
       when "return_type"
         interpret_argless_method(method, args) { @return_type || Nop.new }
       when "body"
@@ -1239,6 +1321,16 @@ module Crystal
       when "visibility"
         interpret_argless_method(method, args) do
           visibility_to_symbol(@visibility)
+        end
+      when "annotation"
+        fetch_annotation(self, method, args) do |type|
+          self.annotation(type)
+        end
+      when "annotations"
+        fetch_annotation(self, method, args) do |type|
+          annotations = self.annotations(type)
+          return ArrayLiteral.new if annotations.nil?
+          ArrayLiteral.map(annotations, &.itself)
         end
       else
         super
@@ -1278,6 +1370,19 @@ module Crystal
       case method
       when "exp"
         interpret_argless_method(method, args) { @exp }
+      else
+        super
+      end
+    end
+  end
+
+  class OffsetOf
+    def interpret(method, args, block, interpreter)
+      case method
+      when "type"
+        interpret_argless_method(method, args) { @offsetof_type }
+      when "instance_var"
+        interpret_argless_method(method, args) { @instance_var }
       else
         super
       end
@@ -1399,8 +1504,10 @@ module Crystal
         interpret_argless_method(method, args) { BoolLiteral.new(type.abstract?) }
       when "union?"
         interpret_argless_method(method, args) { BoolLiteral.new(type.is_a?(UnionType)) }
+      when "nilable?"
+        interpret_argless_method(method, args) { BoolLiteral.new(type.nilable?) }
       when "union_types"
-        interpret_argless_method(method, args) { TypeNode.union_types(type) }
+        interpret_argless_method(method, args) { TypeNode.union_types(self) }
       when "name"
         interpret_argless_method(method, args) { MacroId.new(type.devirtualize.to_s) }
       when "type_vars"
@@ -1438,6 +1545,16 @@ module Crystal
         interpret_one_arg_method(method, args) do |arg|
           value = arg.to_string("argument to 'TypeNode#has_attribute?'")
           BoolLiteral.new(!!type.has_attribute?(value))
+        end
+      when "annotation"
+        fetch_annotation(self, method, args) do |type|
+          self.type.annotation(type)
+        end
+      when "annotations"
+        fetch_annotation(self, method, args) do |type|
+          annotations = self.type.annotations(type)
+          return ArrayLiteral.new if annotations.nil?
+          ArrayLiteral.map(annotations, &.itself)
         end
       when "size"
         interpret_argless_method(method, args) do
@@ -1528,6 +1645,10 @@ module Crystal
           value = arg2.to_string("second argument to 'TypeNode#overrides?")
           TypeNode.overrides?(type, arg1.type, value)
         end
+      when "resolve"
+        interpret_argless_method(method, args) { self }
+      when "resolve?"
+        interpret_argless_method(method, args) { self }
       else
         super
       end
@@ -1536,39 +1657,60 @@ module Crystal
     def self.type_vars(type)
       if type.is_a?(GenericClassInstanceType)
         if type.is_a?(TupleInstanceType)
-          ArrayLiteral.map(type.tuple_types) do |tuple_type|
-            TypeNode.new(tuple_type)
+          if type.tuple_types.empty?
+            empty_no_return_array
+          else
+            ArrayLiteral.map(type.tuple_types) do |tuple_type|
+              TypeNode.new(tuple_type)
+            end
           end
         else
-          ArrayLiteral.map(type.type_vars.values) do |type_var|
-            if type_var.is_a?(Var)
-              TypeNode.new(type_var.type)
-            else
-              type_var
+          if type.type_vars.empty?
+            empty_no_return_array
+          else
+            ArrayLiteral.map(type.type_vars.values) do |type_var|
+              if type_var.is_a?(Var)
+                TypeNode.new(type_var.type)
+              else
+                type_var
+              end
             end
           end
         end
       elsif type.is_a?(GenericType)
-        ArrayLiteral.map(type.as(GenericType).type_vars) do |type_var|
-          MacroId.new(type_var)
+        t = type.as(GenericType)
+        if t.type_vars.empty?
+          empty_no_return_array
+        else
+          ArrayLiteral.map(t.type_vars) do |type_var|
+            MacroId.new(type_var)
+          end
         end
       else
-        ArrayLiteral.new
+        empty_no_return_array
       end
     end
 
     def self.instance_vars(type)
       if type.is_a?(InstanceVarContainer)
         ArrayLiteral.map(type.all_instance_vars) do |name, ivar|
-          MetaVar.new(name[1..-1], ivar.type)
+          meta_var = MetaMacroVar.new(name[1..-1], ivar.type)
+          meta_var.var = ivar
+          meta_var.default_value = type.get_instance_var_initializer(name).try(&.value)
+          meta_var
         end
       else
-        ArrayLiteral.new
+        empty_no_return_array
       end
     end
 
     def self.ancestors(type)
-      ArrayLiteral.map(type.ancestors) { |ancestor| TypeNode.new(ancestor) }
+      ancestors = type.ancestors
+      if ancestors.empty?
+        empty_no_return_array
+      else
+        ArrayLiteral.map(type.ancestors) { |ancestor| TypeNode.new(ancestor) }
+      end
     end
 
     def self.superclass(type)
@@ -1579,21 +1721,40 @@ module Crystal
     end
 
     def self.subclasses(type)
-      ArrayLiteral.map(type.devirtualize.subclasses) { |subtype| TypeNode.new(subtype) }
+      subclasses = type.devirtualize.subclasses
+      if subclasses.empty?
+        empty_no_return_array
+      else
+        ArrayLiteral.map(subclasses) { |subtype| TypeNode.new(subtype) }
+      end
     end
 
     def self.all_subclasses(type)
-      ArrayLiteral.map(type.devirtualize.all_subclasses) { |subtype| TypeNode.new(subtype) }
+      subclasses = type.devirtualize.all_subclasses
+      if subclasses.empty?
+        empty_no_return_array
+      else
+        ArrayLiteral.map(subclasses) { |subtype| TypeNode.new(subtype) }
+      end
     end
 
-    def self.union_types(type)
-      raise "undefined method 'union_types' for TypeNode of type #{type} (must be a union type)" unless type.is_a?(UnionType)
-      ArrayLiteral.map(type.union_types) { |uniontype| TypeNode.new(uniontype) }
+    def self.union_types(type_node)
+      type = type_node.type
+
+      if type.is_a?(UnionType)
+        ArrayLiteral.map(type.union_types) { |uniontype| TypeNode.new(uniontype) }
+      else
+        ArrayLiteral.new([type_node] of ASTNode)
+      end
     end
 
     def self.constants(type)
-      names = type.types.map { |name, member_type| MacroId.new(name).as(ASTNode) }
-      ArrayLiteral.new names
+      if type.types.empty?
+        empty_no_return_array
+      else
+        names = type.types.map { |name, member_type| MacroId.new(name).as(ASTNode) }
+        ArrayLiteral.new names
+      end
     end
 
     def self.has_constant?(type, name)
@@ -1834,6 +1995,8 @@ module Crystal
         interpret_argless_method(method, args) { interpreter.resolve(self) }
       when "resolve?"
         interpret_argless_method(method, args) { interpreter.resolve?(self) || NilLiteral.new }
+      when "types"
+        interpret_argless_method(method, args) { ArrayLiteral.new([self] of ASTNode) }
       else
         super
       end
@@ -1909,6 +2072,47 @@ module Crystal
             NilLiteral.new
           end
         end
+      when "resolve"
+        interpret_argless_method(method, args) { interpreter.resolve(self) }
+      when "resolve?"
+        interpret_argless_method(method, args) { interpreter.resolve?(self) || NilLiteral.new }
+      when "types"
+        interpret_argless_method(method, args) { ArrayLiteral.new([self] of ASTNode) }
+      else
+        super
+      end
+    end
+  end
+
+  class Annotation
+    def interpret(method, args, block, interpreter)
+      case method
+      when "[]"
+        interpret_one_arg_method(method, args) do |arg|
+          case arg
+          when NumberLiteral
+            index = arg.to_number.to_i
+            return self.args[index]? || NilLiteral.new
+          when SymbolLiteral then name = arg.value
+          when StringLiteral then name = arg.value
+          when MacroId       then name = arg.value
+          else
+            raise "argument to [] must be a number, symbol or string, not #{arg.class_desc}:\n\n#{arg}"
+          end
+
+          named_arg = self.named_args.try &.find do |named_arg|
+            named_arg.name == name
+          end
+          named_arg.try(&.value) || NilLiteral.new
+        end
+      when "args"
+        interpret_argless_method(method, args) do
+          TupleLiteral.new self.args
+        end
+      when "named_args"
+        interpret_argless_method(method, args) do
+          get_named_annotation_args self
+        end
       else
         super
       end
@@ -1916,7 +2120,15 @@ module Crystal
   end
 end
 
-private def intepret_array_or_tuple_method(object, klass, method, args, block, interpreter)
+private def get_named_annotation_args(object)
+  if named_args = object.named_args
+    Crystal::NamedTupleLiteral.new(named_args.map { |arg| Crystal::NamedTupleLiteral::Entry.new(arg.name, arg.value) })
+  else
+    Crystal::NamedTupleLiteral.new
+  end
+end
+
+private def interpret_array_or_tuple_method(object, klass, method, args, block, interpreter)
   case method
   when "any?"
     object.interpret_argless_method(method, args) do
@@ -2033,6 +2245,12 @@ private def intepret_array_or_tuple_method(object, klass, method, args, block, i
     klass.new(object.elements.shuffle)
   when "sort"
     klass.new(object.elements.sort { |x, y| x.interpret_compare(y) })
+  when "sort_by"
+    object.interpret_argless_method(method, args) do
+      raise "sort_by expects a block" unless block
+
+      sort_by(object, klass, block, interpreter)
+    end
   when "uniq"
     klass.new(object.elements.uniq)
   when "[]"
@@ -2150,7 +2368,11 @@ private def macro_raise(node, args, interpreter)
   node.raise msg, exception_type: Crystal::MacroRaiseException
 end
 
-def filter(object, klass, block, interpreter, keep = true)
+private def empty_no_return_array
+  Crystal::ArrayLiteral.new(of: Crystal::Path.global("NoReturn"))
+end
+
+private def filter(object, klass, block, interpreter, keep = true)
   block_arg = block.args.first?
 
   klass.new(object.elements.select do |elem|
@@ -2158,4 +2380,33 @@ def filter(object, klass, block, interpreter, keep = true)
     block_result = interpreter.accept(block.body).truthy?
     keep ? block_result : !block_result
   end)
+end
+
+private def fetch_annotation(node, method, args)
+  node.interpret_one_arg_method(method, args) do |arg|
+    unless arg.is_a?(Crystal::TypeNode)
+      args[0].raise "argument to '#{node.class_desc}#annotation' must be a TypeNode, not #{arg.class_desc}'"
+    end
+
+    type = arg.type
+    unless type.is_a?(Crystal::AnnotationType)
+      args[0].raise "argument to '#{node.class_desc}#annotation' must be an annotation type , not #{type} (#{type.type_desc})'"
+    end
+
+    value = yield type
+    value || Crystal::NilLiteral.new
+  end
+end
+
+private def sort_by(object, klass, block, interpreter)
+  block_arg = block.args.first?
+
+  klass.new(object.elements.sort { |x, y|
+    block_arg.try { |arg| interpreter.define_var(arg.name, x) }
+    x_result = interpreter.accept(block.body)
+    block_arg.try { |arg| interpreter.define_var(arg.name, y) }
+    y_result = interpreter.accept(block.body)
+
+    x_result.interpret_compare(y_result)
+  })
 end

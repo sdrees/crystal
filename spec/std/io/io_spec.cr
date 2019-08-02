@@ -1,4 +1,4 @@
-require "spec"
+require "../spec_helper"
 require "big"
 require "base64"
 
@@ -42,7 +42,7 @@ private class SimpleIOMemory < IO
     count
   end
 
-  def write(slice : Bytes)
+  def write(slice : Bytes) : Nil
     count = slice.size
     new_bytesize = bytesize + count
     if new_bytesize > @capacity
@@ -103,9 +103,6 @@ describe IO do
       lines.next.should eq("hello")
       lines.next.should eq("bye")
       lines.next.should be_a(Iterator::Stop)
-
-      lines.rewind
-      lines.next.should eq("hello")
     end
 
     it "iterates by line with chomp false" do
@@ -114,9 +111,6 @@ describe IO do
       lines.next.should eq("hello\n")
       lines.next.should eq("bye\n")
       lines.next.should be_a(Iterator::Stop)
-
-      lines.rewind
-      lines.next.should eq("hello\n")
     end
 
     it "iterates by char" do
@@ -127,9 +121,6 @@ describe IO do
       chars.next.should eq('あ')
       chars.next.should eq('ぼ')
       chars.next.should be_a(Iterator::Stop)
-
-      chars.rewind
-      chars.next.should eq('a')
     end
 
     it "iterates by byte" do
@@ -138,9 +129,6 @@ describe IO do
       bytes.next.should eq('a'.ord)
       bytes.next.should eq('b'.ord)
       bytes.next.should be_a(Iterator::Stop)
-
-      bytes.rewind
-      bytes.next.should eq('a'.ord)
     end
   end
 
@@ -170,8 +158,8 @@ describe IO do
   end
 
   it "reopens" do
-    File.open("#{__DIR__}/../data/test_file.txt") do |file1|
-      File.open("#{__DIR__}/../data/test_file.ini") do |file2|
+    File.open(datapath("test_file.txt")) do |file1|
+      File.open(datapath("test_file.ini")) do |file2|
         file2.reopen(file1)
         file2.gets.should eq("Hello World")
       end
@@ -243,9 +231,9 @@ describe IO do
 
     it "gets with single byte string as delimiter" do
       io = SimpleIOMemory.new("hello\nworld\nbye")
-      io.gets("\n").should eq("hello\n")
-      io.gets("\n").should eq("world\n")
-      io.gets("\n").should eq("bye")
+      io.gets('\n').should eq("hello\n")
+      io.gets('\n').should eq("world\n")
+      io.gets('\n').should eq("bye")
     end
 
     it "does gets with limit" do
@@ -334,54 +322,30 @@ describe IO do
     end
 
     it "does each_line" do
+      lines = [] of String
       io = SimpleIOMemory.new("a\nbb\ncc")
-      counter = 0
       io.each_line do |line|
-        case counter
-        when 0
-          line.should eq("a")
-        when 1
-          line.should eq("bb")
-        when 2
-          line.should eq("cc")
-        end
-        counter += 1
-      end.should be_nil
-      counter.should eq(3)
+        lines << line
+      end
+      lines.should eq ["a", "bb", "cc"]
     end
 
     it "does each_char" do
+      chars = [] of Char
       io = SimpleIOMemory.new("あいう")
-      counter = 0
       io.each_char do |c|
-        case counter
-        when 0
-          c.should eq('あ')
-        when 1
-          c.should eq('い')
-        when 2
-          c.should eq('う')
-        end
-        counter += 1
-      end.should be_nil
-      counter.should eq(3)
+        chars << c
+      end
+      chars.should eq ['あ', 'い', 'う']
     end
 
     it "does each_byte" do
+      bytes = [] of UInt8
       io = SimpleIOMemory.new("abc")
-      counter = 0
       io.each_byte do |b|
-        case counter
-        when 0
-          b.should eq('a'.ord)
-        when 1
-          b.should eq('b'.ord)
-        when 2
-          b.should eq('c'.ord)
-        end
-        counter += 1
-      end.should be_nil
-      counter.should eq(3)
+        bytes << b
+      end
+      bytes.should eq ['a'.ord.to_u8, 'b'.ord.to_u8, 'c'.ord.to_u8]
     end
 
     it "raises on EOF with read_line" do
@@ -689,6 +653,18 @@ describe IO do
         end
       end
 
+      it "sets encoding to utf-8 and stays as UTF-8" do
+        io = SimpleIOMemory.new(Base64.decode_string("ey8qx+Tl8fwg7+Dw4Ozl8vD7IOLo5+jy4CovfQ=="))
+        io.set_encoding("utf-8")
+        io.encoding.should eq("UTF-8")
+      end
+
+      it "sets encoding to utf8 and stays as UTF-8" do
+        io = SimpleIOMemory.new(Base64.decode_string("ey8qx+Tl8fwg7+Dw4Ozl8vD7IOLo5+jy4CovfQ=="))
+        io.set_encoding("utf8")
+        io.encoding.should eq("UTF-8")
+      end
+
       it "does skips when converting to UTF-8" do
         io = SimpleIOMemory.new(Base64.decode_string("ey8qx+Tl8fwg7+Dw4Ozl8vD7IOLo5+jy4CovfQ=="))
         io.set_encoding("UTF-8", invalid: :skip)
@@ -703,14 +679,14 @@ describe IO do
       end
 
       it "decodes incomplete multibyte sequence with skip (2) (#3285)" do
-        str = File.read("#{__DIR__}/../data/io_data_incomplete_multibyte_sequence.txt")
+        str = File.read(datapath("io_data_incomplete_multibyte_sequence.txt"))
         m = IO::Memory.new(Base64.decode_string str)
         m.set_encoding("UTF-8", invalid: :skip)
         m.gets_to_end.bytesize.should eq(4277)
       end
 
       it "decodes incomplete multibyte sequence with skip (3) (#3285)" do
-        str = File.read("#{__DIR__}/../data/io_data_incomplete_multibyte_sequence_2.txt")
+        str = File.read(datapath("io_data_incomplete_multibyte_sequence_2.txt"))
         m = IO::Memory.new(Base64.decode_string str)
         m.set_encoding("UTF-8", invalid: :skip)
         m.gets_to_end.bytesize.should eq(8977)

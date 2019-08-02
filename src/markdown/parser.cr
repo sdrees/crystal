@@ -1,6 +1,7 @@
 class Markdown::Parser
   record PrefixHeader, count : Int32
   record UnorderedList, char : Char
+  record CodeFence, language : String
 
   @lines : Array(String)
 
@@ -33,8 +34,8 @@ class Markdown::Parser
       render_horizontal_rule
     when UnorderedList
       render_unordered_list(item.char)
-    when :fenced_code
-      render_fenced_code
+    when CodeFence
+      render_fenced_code(item.language)
     when :ordered_list
       render_ordered_list
     when :quote
@@ -73,8 +74,8 @@ class Markdown::Parser
       return UnorderedList.new('-')
     end
 
-    if starts_with_backticks? line
-      return :fenced_code
+    if (code_fence = code_fence?(line))
+      return code_fence
     end
 
     if starts_with_digits_dot? line
@@ -155,9 +156,8 @@ class Markdown::Parser
     append_double_newline_if_has_more
   end
 
-  def render_fenced_code
+  def render_fenced_code(language : String)
     line = @lines[@line]
-    language = line[3..-1].strip
 
     if language.empty?
       @renderer.begin_code nil
@@ -178,7 +178,7 @@ class Markdown::Parser
           break
         end
 
-        if starts_with_backticks? @lines[@line]
+        if code_fence? @lines[@line]
           @line += 1
           break
         end
@@ -305,7 +305,6 @@ class Markdown::Parser
     two_stars = false
     one_underscore = false
     two_underscores = false
-    one_backtick = false
     in_link = false
     last_is_space = true
 
@@ -358,15 +357,15 @@ class Markdown::Parser
           one_underscore = !one_underscore
         end
       when '`'
-        if one_backtick || has_closing?('`', 1, str, (pos + 1), bytesize)
+        if has_closing?('`', 1, str, (pos + 1), bytesize)
           @renderer.text line.byte_slice(cursor, pos - cursor)
           cursor = pos + 1
-          if one_backtick
-            @renderer.end_inline_code
-          else
-            @renderer.begin_inline_code
-          end
-          one_backtick = !one_backtick
+          @renderer.begin_inline_code
+          idx = (str + pos + 1).to_slice(bytesize).index('`'.ord).not_nil!
+          @renderer.text line.byte_slice(cursor, idx)
+          pos = pos + 1 + idx
+          @renderer.end_inline_code
+          cursor = pos + 1
         end
       when '!'
         if pos + 1 < bytesize && str[pos + 1] === '['
@@ -472,11 +471,6 @@ class Markdown::Parser
     true
   end
 
-  def next_line_starts_with_backticks?
-    return false unless @line + 1 < @lines.size
-    starts_with_backticks? @lines[@line + 1]
-  end
-
   def count_pounds(line)
     bytesize = line.bytesize
     str = line.to_unsafe
@@ -531,8 +525,11 @@ class Markdown::Parser
     !next_line.starts_with?("  ")
   end
 
-  def starts_with_backticks?(line)
-    line.starts_with? "```"
+  def code_fence?(line)
+    return nil unless line.starts_with?("```")
+    language = line.lstrip('`').strip
+    return nil if language.includes? '`'
+    CodeFence.new(language)
   end
 
   def starts_with_digits_dot?(line)
@@ -637,7 +634,7 @@ class Markdown::Parser
     line -= 1 if line == @lines.size
 
     if line > start
-      @lines[line] = (start..line).join("\n") { |i| @lines[i] }
+      @lines[line] = (start..line).join('\n') { |i| @lines[i] }
       @line = line
     end
   end

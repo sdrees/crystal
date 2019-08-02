@@ -1,6 +1,6 @@
 module Crystal::Doc
   record Main, body : String, program : Type, repository_name : String do
-    def to_s(io : IO)
+    def to_s(io : IO) : Nil
       to_json(io)
     end
 
@@ -13,7 +13,7 @@ module Crystal::Doc
     def to_jsonp(io : IO)
       io << "crystal_doc_search_index_callback("
       to_json(io)
-      io << ")"
+      io << ')'
     end
 
     def to_json(builder : JSON::Builder)

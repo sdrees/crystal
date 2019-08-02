@@ -4,6 +4,8 @@ require "c/iconv"
 struct Iconv
   @skip_invalid : Bool
 
+  ERROR = LibC::SizeT::MAX # (size_t)(-1)
+
   def initialize(from : String, to : String, invalid : Symbol? = nil)
     original_from, original_to = from, to
 
@@ -17,7 +19,7 @@ struct Iconv
 
     @iconv = LibC.iconv_open(to, from)
 
-    if @iconv.address == LibC::SizeT.new(-1)
+    if @iconv.address == ERROR
       if Errno.value == Errno::EINVAL
         if original_from == "UTF-8"
           raise ArgumentError.new("Invalid encoding: #{original_to}")

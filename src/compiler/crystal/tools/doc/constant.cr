@@ -17,6 +17,10 @@ class Crystal::Doc::Constant
     @const.name
   end
 
+  def id
+    name
+  end
+
   def value
     @const.value
   end
@@ -27,10 +31,15 @@ class Crystal::Doc::Constant
 
   def to_json(builder : JSON::Builder)
     builder.object do
+      builder.field "id", id
       builder.field "name", name
       builder.field "value", value.try(&.to_s)
       builder.field "doc", doc
       builder.field "summary", formatted_summary
     end
+  end
+
+  def annotations(annotation_type)
+    @const.annotations(annotation_type)
   end
 end

@@ -31,6 +31,16 @@ describe "Enumerable" do
     end
   end
 
+  describe "all? with pattern" do
+    it "returns true" do
+      [2, 3, 4].all?(1..5).should be_true
+    end
+
+    it "returns false" do
+      [2, 3, 4].all?(1..3).should be_false
+    end
+  end
+
   describe "any? with block" do
     it "returns true if at least one element fulfills the condition" do
       ["ant", "bear", "cat"].any? { |word| word.size >= 4 }.should be_true
@@ -48,6 +58,16 @@ describe "Enumerable" do
 
     it "returns false if all elements are falsey" do
       [nil, false].any?.should be_false
+    end
+  end
+
+  describe "any? with pattern" do
+    it "returns true" do
+      [nil, true, 99].any?(Int32).should be_true
+    end
+
+    it "returns false" do
+      [nil, false].any?(Int32).should be_false
     end
   end
 
@@ -98,7 +118,7 @@ describe "Enumerable" do
       [1, 2].chunk { false }.to_a.should eq [{false, [1, 2]}]
       [1, 1, 2, 3, 3].chunk(&.itself).to_a.should eq [{1, [1, 1]}, {2, [2]}, {3, [3, 3]}]
       [1, 1, 2, 3, 3].chunk(&.<=(2)).to_a.should eq [{true, [1, 1, 2]}, {false, [3, 3]}]
-      (0..10).chunk(&./(3)).to_a.should eq [{0, [0, 1, 2]}, {1, [3, 4, 5]}, {2, [6, 7, 8]}, {3, [9, 10]}]
+      (0..10).chunk(&.//(3)).to_a.should eq [{0, [0, 1, 2]}, {1, [3, 4, 5]}, {2, [6, 7, 8]}, {3, [9, 10]}]
     end
 
     it "work with class" do
@@ -112,10 +132,7 @@ describe "Enumerable" do
     end
 
     it "rewind" do
-      i = (0..10).chunk(&./(3))
-      i.next.should eq({0, [0, 1, 2]})
-      i.next.should eq({1, [3, 4, 5]})
-      i.rewind
+      i = (0..10).chunk(&.//(3))
       i.next.should eq({0, [0, 1, 2]})
       i.next.should eq({1, [3, 4, 5]})
     end
@@ -167,11 +184,6 @@ describe "Enumerable" do
       c = iter.next.as(Tuple)
       c.should eq({3, [3, 3]})
       c[1].should be(a[1])
-
-      iter.rewind
-      a1 = iter.next.as(Tuple)
-      a1.should eq({1, [1, 1]})
-      a1[1].should be(a[1])
     end
   end
 
@@ -181,7 +193,7 @@ describe "Enumerable" do
       [1, 2].chunks { false }.should eq [{false, [1, 2]}]
       [1, 1, 2, 3, 3].chunks(&.itself).should eq [{1, [1, 1]}, {2, [2]}, {3, [3, 3]}]
       [1, 1, 2, 3, 3].chunks(&.<=(2)).should eq [{true, [1, 1, 2]}, {false, [3, 3]}]
-      (0..10).chunks(&./(3)).should eq [{0, [0, 1, 2]}, {1, [3, 4, 5]}, {2, [6, 7, 8]}, {3, [9, 10]}]
+      (0..10).chunks(&.//(3)).should eq [{0, [0, 1, 2]}, {1, [3, 4, 5]}, {2, [6, 7, 8]}, {3, [9, 10]}]
     end
 
     it "work with class" do
@@ -189,7 +201,7 @@ describe "Enumerable" do
     end
 
     it "work with pure enumerable" do
-      SpecEnumerable.new.chunks(&./(2)).should eq [{0, [1]}, {1, [2, 3]}]
+      SpecEnumerable.new.chunks(&.//(2)).should eq [{0, [1]}, {1, [2, 3]}]
     end
 
     it "returns elements for which the block returns Enumerable::Chunk::Alone in separate Arrays" do
@@ -242,9 +254,6 @@ describe "Enumerable" do
       iter.next.should eq([2, 3, 4])
       iter.next.should eq([3, 4, 5])
       iter.next.should be_a(Iterator::Stop)
-
-      iter.rewind
-      iter.next.should eq([1, 2, 3])
     end
 
     it "returns each_cons iterator with reuse = true" do
@@ -266,7 +275,16 @@ describe "Enumerable" do
       a.should be(reuse)
     end
 
-    it "returns running pairs with reuse = true" do
+    it "returns each_cons iterator with reuse = deque" do
+      reuse = Deque(Int32).new
+      iter = [1, 2, 3, 4, 5].each_cons(3, reuse: reuse)
+
+      a = iter.next
+      a.should eq(Deque{1, 2, 3})
+      a.should be(reuse)
+    end
+
+    it "yields running pairs with reuse = true" do
       array = [] of Array(Int32)
       object_ids = Set(UInt64).new
       [1, 2, 3, 4].each_cons(2, reuse: true) do |pair|
@@ -277,7 +295,7 @@ describe "Enumerable" do
       object_ids.size.should eq(1)
     end
 
-    it "returns running pairs with reuse = array" do
+    it "yields running pairs with reuse = array" do
       array = [] of Array(Int32)
       reuse = [] of Int32
       [1, 2, 3, 4].each_cons(2, reuse: reuse) do |pair|
@@ -285,6 +303,16 @@ describe "Enumerable" do
         array << pair.dup
       end
       array.should eq([[1, 2], [2, 3], [3, 4]])
+    end
+
+    it "yields running pairs with reuse = deque" do
+      array = [] of Deque(Int32)
+      reuse = Deque(Int32).new
+      [1, 2, 3, 4].each_cons(2, reuse: reuse) do |pair|
+        pair.should be(reuse)
+        array << pair.dup
+      end
+      array.should eq([Deque{1, 2}, Deque{2, 3}, Deque{3, 4}])
     end
   end
 
@@ -330,9 +358,6 @@ describe "Enumerable" do
       iter.next.should eq([3, 4])
       iter.next.should eq([5])
       iter.next.should be_a(Iterator::Stop)
-
-      iter.rewind
-      iter.next.should eq([1, 2])
     end
   end
 
@@ -358,9 +383,6 @@ describe "Enumerable" do
       iter.next.should eq({1, 0})
       iter.next.should eq({2, 1})
       iter.next.should be_a(Iterator::Stop)
-
-      iter.rewind
-      iter.next.should eq({1, 0})
     end
   end
 
@@ -379,9 +401,6 @@ describe "Enumerable" do
       iter.next.should eq({1, "a"})
       iter.next.should eq({2, "a"})
       iter.next.should be_a(Iterator::Stop)
-
-      iter.rewind
-      iter.next.should eq({1, "a"})
     end
   end
 
@@ -563,6 +582,14 @@ describe "Enumerable" do
     end
   end
 
+  describe "reduce?" do
+    it { [1, 2, 3].reduce? { |memo, i| memo + i }.should eq(6) }
+
+    it "returns nil if empty" do
+      ([] of Int32).reduce? { |memo, i| memo + i }.should be_nil
+    end
+  end
+
   describe "join" do
     it "joins with separator and block" do
       str = [1, 2, 3].join(", ") { |x| x + 1 }
@@ -669,7 +696,7 @@ describe "Enumerable" do
 
   describe "min_by?" do
     it "returns nil if empty" do
-      ([] of Int32).max_by? { |x| -x }.should be_nil
+      ([] of Int32).min_by? { |x| -x }.should be_nil
     end
   end
 
@@ -729,10 +756,20 @@ describe "Enumerable" do
     it { [nil, false, true].none?.should be_false }
   end
 
+  describe "none? with pattern" do
+    it { [2, 3, 4].none?(5..7).should be_true }
+    it { [1, false, nil].none?(Bool).should be_false }
+  end
+
   describe "one?" do
     it { [1, 2, 2, 3].one? { |x| x == 1 }.should eq(true) }
     it { [1, 2, 2, 3].one? { |x| x == 2 }.should eq(false) }
     it { [1, 2, 2, 3].one? { |x| x == 0 }.should eq(false) }
+    it { [1, 2, false].one?.should be_false }
+    it { [1, false, false].one?.should be_true }
+    it { [false].one?.should be_false }
+    it { [1, 5, 9].one?(3..6).should be_true }
+    it { [1, false, 2].one?(Int32).should be_false }
   end
 
   describe "partition" do
@@ -744,11 +781,31 @@ describe "Enumerable" do
     it "rejects the values for which the block returns true" do
       [1, 2, 3, 4].reject(&.even?).should eq([1, 3])
     end
+
+    it "rejects with pattern" do
+      [1, 2, 3, 4, 5, 6].reject(2..4).should eq([1, 5, 6])
+    end
+
+    it "with type" do
+      ints = [1, true, false, 3].reject(Bool)
+      ints.should eq([1, 3])
+      ints.should be_a(Array(Int32))
+    end
   end
 
   describe "select" do
     it "selects the values for which the block returns true" do
       [1, 2, 3, 4].select(&.even?).should eq([2, 4])
+    end
+
+    it "with pattern" do
+      [1, 2, 3, 4, 5].select(2..4).should eq([2, 3, 4])
+    end
+
+    it "with type" do
+      ints = [1, true, nil, 3, false].select(Int32)
+      ints.should eq([1, 3])
+      ints.should be_a(Array(Int32))
     end
   end
 
@@ -778,7 +835,7 @@ describe "Enumerable" do
       [1, 2, 3].skip_while { true }.should eq [] of Int32
     end
 
-    it "returns the full Array if the the first check is false" do
+    it "returns the full Array if the first check is false" do
       [5, 0, 1, 2, 3].skip_while { |x| x < 4 }.should eq [5, 0, 1, 2, 3]
     end
 
@@ -856,6 +913,12 @@ describe "Enumerable" do
     end
   end
 
+  describe "tally" do
+    it "returns a hash with counts according to the value" do
+      %w[1 2 3 3 3 2].tally.should eq({"1" => 1, "2" => 2, "3" => 3})
+    end
+  end
+
   describe "to_a" do
     it "converts to an Array" do
       (1..3).to_a.should eq [1, 2, 3]
@@ -871,6 +934,10 @@ describe "Enumerable" do
 
     it "for array" do
       [[:a, :b], [:c, :d]].to_h.should eq({:a => :b, :c => :d})
+    end
+
+    it "with block" do
+      (1..3).to_h { |i| {i, i ** 2} }.should eq({1 => 1, 2 => 4, 3 => 9})
     end
   end
 end

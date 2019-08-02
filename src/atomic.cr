@@ -157,7 +157,12 @@ struct Atomic(T)
   # atomic.get      # => 10
   # ```
   def swap(value : T)
-    Ops.atomicrmw(:xchg, pointerof(@value), value, :sequentially_consistent, false)
+    {% if T.union? && T.union_types.all? { |t| t == Nil || t < Reference } || T < Reference %}
+      address = Ops.atomicrmw(:xchg, pointerof(@value).as(LibC::SizeT*), LibC::SizeT.new(value.as(T).object_id), :sequentially_consistent, false)
+      Pointer(T).new(address).as(T)
+    {% else %}
+      Ops.atomicrmw(:xchg, pointerof(@value), value, :sequentially_consistent, false)
+    {% end %}
   end
 
   # Atomically sets this atomic's value to *value*. Returns the **new** value.
@@ -215,5 +220,35 @@ struct Atomic(T)
     @[Primitive(:store_atomic)]
     def self.store(ptr : T*, value : T, ordering : Symbol, volatile : Bool) : Nil forall T
     end
+  end
+end
+
+# An atomic flag, that can be set or not.
+#
+# Concurrency safe. If many fibers try to set the atomic in parallel, only one
+# will succeed.
+#
+# Example:
+# ```
+# flag = Atomic::Flag.new
+# flag.test_and_set # => true
+# flag.test_and_set # => false
+# flag.clear
+# flag.test_and_set # => true
+# ```
+struct Atomic::Flag
+  def initialize
+    @value = 0_u8
+  end
+
+  # Atomically tries to set the flag. Only succeeds and returns `true` if the
+  # flag wasn't previously set; returns `false` otherwise.
+  def test_and_set : Bool
+    Atomic::Ops.atomicrmw(:xchg, pointerof(@value), 1_u8, :sequentially_consistent, false) == 0_u8
+  end
+
+  # Atomically clears the flag.
+  def clear : Nil
+    Atomic::Ops.store(pointerof(@value), 0_u8, :sequentially_consistent, true)
   end
 end

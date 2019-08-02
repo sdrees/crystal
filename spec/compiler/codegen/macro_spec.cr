@@ -2,13 +2,13 @@ require "../../spec_helper"
 
 describe "Code gen: macro" do
   it "expands macro" do
-    run("macro foo; 1 + 2; end; foo").to_i.should eq(3)
+    run("macro foo; 1 &+ 2; end; foo").to_i.should eq(3)
   end
 
   it "expands macro with arguments" do
     run(%(
       macro foo(n)
-        {{n}} + 2
+        {{n}} &+ 2
       end
 
       foo(1)
@@ -19,7 +19,7 @@ describe "Code gen: macro" do
     run(%(
       macro foo
         def x
-          1 + 2
+          1 &+ 2
         end
       end
 
@@ -79,7 +79,7 @@ describe "Code gen: macro" do
     run(%(
       a = 0
       {% for i in [1, 2, 3] %}
-        a += {{i}}
+        a &+= {{i}}
       {% end %}
       a
       )).to_i.should eq(6)
@@ -89,7 +89,7 @@ describe "Code gen: macro" do
     run(%(
       a = 0
       {% if 1 == 1 %}
-        a += 1
+        a &+= 1
       {% end %}
       a
       )).to_i.should eq(1)
@@ -99,7 +99,7 @@ describe "Code gen: macro" do
     run(%(
       a = 0
       {% if 1 == 2 %}
-        a += 1
+        a &+= 1
       {% end %}
       a
       )).to_i.should eq(0)
@@ -109,7 +109,7 @@ describe "Code gen: macro" do
     run(%(
       class Foo
         macro foo
-          1 + 2
+          1 &+ 2
         end
 
         def bar
@@ -323,7 +323,7 @@ describe "Code gen: macro" do
       end
 
       macro foo(x, y = :bar)
-        {{x}} + {{y.id}}
+        {{x}} &+ {{y.id}}
       end
 
       foo(1)
@@ -425,9 +425,15 @@ describe "Code gen: macro" do
 
   it "doesn't reuse macro nodes (bug)" do
     run(%(
+      struct Float
+        def &+(other)
+          self + other
+        end
+      end
+
       def foo(x)
         {% for y in [1, 2] %}
-          x + 1
+          x &+ 1
         {% end %}
       end
 
@@ -490,7 +496,7 @@ describe "Code gen: macro" do
 
       a = 0
       foo do |x|
-        a += x
+        a &+= x
       end
       a
       )).to_i.should eq(3)
@@ -554,7 +560,7 @@ describe "Code gen: macro" do
           @x = 1; @x = 1.1
         end
         def foo
-          {{ @type.instance_vars.first.type.union_types.map(&.name).sort }}.join("-")
+          {{ @type.instance_vars.first.type.union_types.map(&.name).sort }}.join('-')
         end
       end
       Foo.new.foo
@@ -599,7 +605,7 @@ describe "Code gen: macro" do
       require "prelude"
       class Foo(T, K)
         def self.foo : String
-          {{ @type.type_vars.map(&.stringify) }}.join("-")
+          {{ @type.type_vars.map(&.stringify) }}.join('-')
         end
       end
       Foo.foo
@@ -617,7 +623,7 @@ describe "Code gen: macro" do
       end
 
       foo do |x|
-        x + 1
+        x &+ 1
       end
       )).to_i.should eq(2)
   end
@@ -625,7 +631,7 @@ describe "Code gen: macro" do
   it "executes with named arguments" do
     run(%(
       macro foo(x = 1)
-        {{x}} + 1
+        {{x}} &+ 1
       end
 
       foo x: 2
@@ -693,7 +699,7 @@ describe "Code gen: macro" do
       end
 
       names = {{ Foo.subclasses.map &.name }}
-      names.join("-")
+      names.join('-')
       )).to_string.should eq("Bar-Baz")
   end
 
@@ -711,7 +717,7 @@ describe "Code gen: macro" do
       end
 
       names = {{ Foo.all_subclasses.map &.name }}
-      names.join("-")
+      names.join('-')
       )).to_string.should eq("Bar-Baz")
   end
 
@@ -735,7 +741,7 @@ describe "Code gen: macro" do
         end
       end
 
-      Color.red.value + Color.green.value + Color.blue.value
+      Color.red.value &+ Color.green.value &+ Color.blue.value
       )).to_i.should eq(0 + 1 + 2)
   end
 
@@ -927,14 +933,14 @@ describe "Code gen: macro" do
   it "doesn't override local variable when using macro variable (2)" do
     run(%(
       macro foo(x)
-        %a = {{x}} + 10
+        %a = {{x}} &+ 10
         %a
       end
 
       a = 1
       z = foo(2)
       w = foo(3)
-      a + z + w
+      a &+ z &+ w
       )).to_i.should eq(26)
   end
 
@@ -947,14 +953,14 @@ describe "Code gen: macro" do
 
         %total = 0
         {% for elem, i in elems %}
-          %total += %var{i}
+          %total &+= %var{i}
         {% end %}
         %total
       end
 
       z = 0
-      z += foo 4, 5, 6
-      z += foo 40, 50, 60
+      z &+= foo 4, 5, 6
+      z &+= foo 40, 50, 60
       z
       )).to_i.should eq(4 + 5 + 6 + 40 + 50 + 60)
   end
@@ -968,7 +974,7 @@ describe "Code gen: macro" do
 
         %total = 0
         {% for elem, i in elems %}
-          %total += %var{elem, i}
+          %total &+= %var{elem, i}
         {% end %}
         %total
       end
@@ -983,7 +989,7 @@ describe "Code gen: macro" do
       class Foo
         def bar(*args) : Int32
           {{ @type }}
-          args[0] + args[1] + args[2]
+          args[0] &+ args[1] &+ args[2]
         end
       end
 
@@ -996,7 +1002,7 @@ describe "Code gen: macro" do
       class Foo
         def bar(foo = 1) : Int32
           {{ @type }}
-          foo + 2
+          foo &+ 2
         end
       end
 
@@ -1302,7 +1308,7 @@ describe "Code gen: macro" do
   it "executes with named arguments for positional arg (1)" do
     run(%(
       macro foo(x)
-        {{x}} + 1
+        {{x}} &+ 1
       end
 
       foo x: 2
@@ -1312,7 +1318,7 @@ describe "Code gen: macro" do
   it "executes with named arguments for positional arg (2)" do
     run(%(
       macro foo(x, y)
-        {{x}} + {{y}} + 1
+        {{x}} &+ {{y}} &+ 1
       end
 
       foo x: 2, y: 3
@@ -1328,7 +1334,7 @@ describe "Code gen: macro" do
       end
 
       macro foo(x, y)
-        {{x}} + {{y}}.bytesize + 1
+        {{x}} &+ {{y}}.bytesize &+ 1
       end
 
       foo y: "foo", x: 2
@@ -1711,5 +1717,106 @@ describe "Code gen: macro" do
 
       {{ Foo.union_types.size }}
       )).to_i.should eq(2)
+  end
+
+  it "gets default value of instance variable" do
+    run(%(
+      class Foo
+        @x = 1
+
+        def default
+          {{@type.instance_vars.first.default_value}}
+        end
+      end
+
+      Foo.new.default
+      )).to_i.should eq(1)
+  end
+
+  it "gets default value of instance variable of generic type" do
+    run(%(
+      require "prelude"
+
+      struct Int32
+        def self.foo
+          10
+        end
+      end
+
+      class Foo(T)
+        @x : T = T.foo
+
+        def default
+          {{@type.instance_vars.first.default_value}}
+        end
+      end
+
+      Foo(Int32).new.default
+      )).to_i.should eq(10)
+  end
+
+  it "gets default value of instance variable of inherited type that also includes module" do
+    run(%(
+      module Moo
+        @moo = 10
+      end
+
+      class Foo
+        include Moo
+
+        def foo
+          {{ @type.instance_vars.first.default_value }}
+        end
+      end
+
+      class Bar < Foo
+      end
+
+      Bar.new.foo
+      )).to_i.should eq(10)
+  end
+
+  it "determines if variable has default value" do
+    run(%(
+      class Foo
+        @x = 1
+        @y : Int32
+
+        def initialize(@y)
+        end
+
+        def defaults
+          {
+            {{ @type.instance_vars.find { |i| i.name == "x" }.has_default_value? }},
+            {{ @type.instance_vars.find { |i| i.name == "y" }.has_default_value? }},
+          }
+        end
+      end
+
+      x, y = Foo.new(2).defaults
+      a = 0
+      a &+= 1 if x
+      a &+= 2 if y
+      a
+    )).to_i.should eq(1)
+  end
+
+  it "expands macro with op assign inside assign (#5568)" do
+    run(%(
+      require "prelude"
+
+      macro expand
+        {{ yield }}
+      end
+
+      def foo
+        {:foo => 1}
+      end
+
+      expand do
+        x = foo[:foo] += 1
+        puts x
+      end
+    )).to_string.chomp.should eq("2")
   end
 end

@@ -8,12 +8,15 @@
 #
 # Complex.new(1, 0)   # => 1.0 + 0.0i
 # Complex.new(5, -12) # => 5.0 - 12.0i
+#
+# 1.to_c # => 1.0 + 0.0i
+# 1.i    # => 0.0 + 1.0i
 # ```
 struct Complex
-  # Returns the real part of self.
+  # Returns the real part.
   getter real : Float64
 
-  # Returns the image part of self.
+  # Returns the imaginary part.
   getter imag : Float64
 
   def initialize(real : Number, imag : Number)
@@ -36,24 +39,70 @@ struct Complex
     false
   end
 
-  # Write this complex object to an *io*.
+  # Returns `self`.
+  def to_c
+    self
+  end
+
+  # Returns the value as a `Float64` if possible (the imaginary part should be exactly zero),
+  # raises otherwise.
+  def to_f64
+    unless @imag.zero?
+      raise Exception.new "Complex number with non-zero imaginary part can't be converted to real number"
+    end
+    @real
+  end
+
+  # Returns the value as a `Float32` if possible (the imaginary part should be exactly zero),
+  # raises otherwise.
+  def to_f32
+    to_f64.to_f32
+  end
+
+  # See `#to_f64`.
+  def to_f
+    to_f64
+  end
+
+  # Returns the value as an `Int64` if possible (the imaginary part should be exactly zero),
+  # raises otherwise.
+  def to_i64
+    to_f64.to_i64
+  end
+
+  # Returns the value as a `Int32` if possible (the imaginary part should be exactly zero),
+  # raises otherwise.
+  def to_i32
+    to_i64.to_i32
+  end
+
+  # See `#to_i32`.
+  def to_i
+    to_i32
+  end
+
+  # Writes this complex object to an *io*.
   #
   # ```
+  # require "complex"
+  #
   # Complex.new(42, 2).to_s # => "42.0 + 2.0i"
   # ```
-  def to_s(io : IO)
+  def to_s(io : IO) : Nil
     io << @real
     io << (@imag >= 0 ? " + " : " - ")
     io << @imag.abs
-    io << "i"
+    io << 'i'
   end
 
-  # Write this complex object to an *io*, surrounded by parentheses.
+  # Writes this complex object to an *io*, surrounded by parentheses.
   #
   # ```
+  # require "complex"
+  #
   # Complex.new(42, 2).inspect # => "(42.0 + 2.0i)"
   # ```
-  def inspect(io : IO)
+  def inspect(io : IO) : Nil
     io << '('
     to_s(io)
     io << ')'
@@ -63,8 +112,10 @@ struct Complex
   # number form, using the Pythagorean theorem.
   #
   # ```
-  # Complex.new(42, 2).abs  # => 42.047592083257278
-  # Complex.new(-42, 2).abs # => 42.047592083257278
+  # require "complex"
+  #
+  # Complex.new(42, 2).abs  # => 42.04759208325728
+  # Complex.new(-42, 2).abs # => 42.04759208325728
   # ```
   def abs
     Math.hypot(@real, @imag)
@@ -73,6 +124,8 @@ struct Complex
   # Returns the square of absolute value in a number form.
   #
   # ```
+  # require "complex"
+  #
   # Complex.new(42, 2).abs2 # => 1768
   # ```
   def abs2
@@ -83,23 +136,27 @@ struct Complex
     self / abs
   end
 
-  # Returns the phase of self.
+  # Returns the phase of `self`.
   def phase
     Math.atan2(@imag, @real)
   end
 
-  # Returns a tuple with the abs value and the phase.
+  # Returns a `Tuple` with the `abs` value and the `phase`.
   #
   # ```
+  # require "complex"
+  #
   # Complex.new(42, 2).polar # => {42.047592083257278, 0.047583103276983396}
   # ```
   def polar
     {abs, phase}
   end
 
-  # Returns the conjugate of self.
+  # Returns the conjugate of `self`.
   #
   # ```
+  # require "complex"
+  #
   # Complex.new(42, 2).conj  # => 42.0 - 2.0i
   # Complex.new(42, -2).conj # => 42.0 + 2.0i
   # ```
@@ -107,7 +164,7 @@ struct Complex
     Complex.new(@real, -@imag)
   end
 
-  # Returns the inverse of self.
+  # Returns the inverse of `self`.
   def inv
     conj / abs2
   end
@@ -130,16 +187,14 @@ struct Complex
            @imag.abs / Math.sqrt(2 * (r + @real))
          end
 
-    if @imag >= 0
-      Complex.new(re, im)
-    else
-      Complex.new(re, -im)
-    end
+    Complex.new(re, @imag >= 0 ? im : -im)
   end
 
-  # Calculates the exp of self.
+  # Calculates the exp of `self`.
   #
   # ```
+  # require "complex"
+  #
   # Complex.new(4, 2).exp # => -22.720847417619233 + 49.645957334580565i
   # ```
   def exp
@@ -147,19 +202,24 @@ struct Complex
     Complex.new(r * Math.cos(@imag), r * Math.sin(@imag))
   end
 
-  # Calculates the log of self.
+  # Calculates the log of `self`.
   def log
     Complex.new(Math.log(abs), phase)
   end
 
-  # Calculates the log2 of self.
+  # Calculates the log2 of `self`.
   def log2
     log / Math::LOG2
   end
 
-  # Calculates the log10 of self.
+  # Calculates the log10 of `self`.
   def log10
     log / Math::LOG10
+  end
+
+  # Returns absolute value of `self`.
+  def +
+    Complex.new(@real.abs, @imag.abs)
   end
 
   # Adds the value of `self` to *other*.
@@ -172,12 +232,12 @@ struct Complex
     Complex.new(@real + other, @imag)
   end
 
-  # Returns the opposite of self.
+  # Returns the opposite of `self`.
   def -
     Complex.new(-@real, -@imag)
   end
 
-  # Removes the value from *other* to self.
+  # Removes the value of *other* from `self`.
   def -(other : Complex)
     Complex.new(@real - other.real, @imag - other.imag)
   end

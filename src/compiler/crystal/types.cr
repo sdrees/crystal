@@ -87,7 +87,7 @@ module Crystal
     end
 
     # Returns all macros defines in this type, indexed by their name.
-    # This does not inlcude methods defined in ancestors.
+    # This does not include methods defined in ancestors.
     def macros : Hash(String, Array(Macro))?
       nil
     end
@@ -105,8 +105,12 @@ module Crystal
       # Nothing
     end
 
-    # Returns `true` if this type can be used in a generic type argument.
-    def allowed_in_generics?
+    # Returns `true` if this type can be assigned to an instance or class
+    # variable, or used in a generic type argument.
+    #
+    # As of now, abstract base type such as Object, Reference, Value,
+    # Int, and unbound generic types such as `Array(T)`, can't be stored.
+    def can_be_stored?
       true
     end
 
@@ -162,6 +166,10 @@ module Crystal
       self.is_a?(NilType)
     end
 
+    def nilable?
+      self.is_a?(NilType) || (self.is_a?(UnionType) && self.union_types.any?(&.nil_type?))
+    end
+
     def bool_type?
       self.is_a?(BoolType)
     end
@@ -210,6 +218,10 @@ module Crystal
       self
     end
 
+    # Returns the type that owns class vars for a type.
+    #
+    # This method returns self, but subclasses might override.
+    # For example, a metaclass's class_var_owner is the instance type.
     def class_var_owner
       self
     end
@@ -260,6 +272,8 @@ module Crystal
     def covariant?(other_type : Type)
       return true if self == other_type
 
+      other_type = other_type.remove_alias
+
       case other_type
       when UnionType
         other_type.union_types.any? do |union_type|
@@ -282,13 +296,60 @@ module Crystal
       raise "BUG: #{self} doesn't implement add_instance_var_initializer"
     end
 
-    def declare_instance_var(name, type : Type)
+    def declare_instance_var(name, type : Type, annotations = nil)
       var = MetaTypeVar.new(name)
       var.owner = self
       var.type = type
+      var.annotations = annotations
       var.bind_to var
       var.freeze_type = type
       instance_vars[name] = var
+    end
+
+    # Determines if `self` can access *type* assuming it's a `protected` access.
+    # If `allow_same_namespace` is true (the default), `protected` also means
+    # the types are in the same namespace. Otherwise, it means they are just
+    # in the same type hierarchy.
+    def has_protected_acces_to?(type, allow_same_namespace = true)
+      owner = self
+
+      # Allow two different generic instantiations
+      # of the same type to have protected access
+      type = type.generic_type.as(Type) if type.is_a?(GenericInstanceType)
+      owner = owner.generic_type.as(Type) if owner.is_a?(GenericInstanceType)
+
+      self.implements?(type) ||
+        type.implements?(self) ||
+        (allow_same_namespace && same_namespace?(type))
+    end
+
+    # Returns true if `self` and *other* are in the same namespace.
+    def same_namespace?(other)
+      top_namespace(self) == top_namespace(other) ||
+        parents.try &.any? { |parent| parent.same_namespace?(other) }
+    end
+
+    private def top_namespace(type)
+      type = type.generic_type if type.is_a?(GenericInstanceType)
+
+      namespace = case type
+                  when NamedType
+                    type.namespace
+                  when GenericClassInstanceType
+                    type.namespace
+                  else
+                    nil
+                  end
+      case namespace
+      when Program
+        type
+      when GenericInstanceType
+        top_namespace(namespace.generic_type)
+      when NamedType
+        top_namespace(namespace)
+      else
+        type
+      end
     end
 
     def types
@@ -332,10 +393,25 @@ module Crystal
         all_defs << item.def unless all_defs.find(&.same?(item.def))
       end
 
-      if lookup_ancestors_for_new || self.lookup_new_in_ancestors? ||
-         !(name == "new" || name == "initialize")
-        parents.try &.each do |parent|
+      is_new = name == "new"
+      is_new_or_initialize = is_new || name == "initialize"
+      return if is_new_or_initialize && !all_defs.empty?
+
+      if !is_new_or_initialize || (lookup_ancestors_for_new || self.lookup_new_in_ancestors?)
+        if is_new
+          # For a `new` method we need to do this in case a `new` is defined
+          # in a module type
+          my_parents = instance_type.parents.try &.map(&.metaclass)
+        else
+          my_parents = parents
+        end
+
+        my_parents.try &.each do |parent|
+          old_size = all_defs.size
           parent.lookup_defs(name, all_defs, lookup_ancestors_for_new)
+
+          # Don't lookup new or initialize in parents once we found some defs
+          break if is_new_or_initialize && all_defs.size > old_size
         end
       end
     end
@@ -382,7 +458,7 @@ module Crystal
 
     record DefInMacroLookup
 
-    # Looks up a macro with the give name and matching the given args
+    # Looks up a macro with the given name and matching the given args
     # and named_args. Returns:
     # - a `Macro`, if found
     # - `nil`, if not found
@@ -528,7 +604,7 @@ module Crystal
       raise "BUG: #{self} doesn't implement add_subclass"
     end
 
-    # Replace type parameetrs in this type with the type parameters
+    # Replace type parameters in this type with the type parameters
     # of the given *instance* type.
     def replace_type_parameters(instance) : Type
       self
@@ -551,6 +627,10 @@ module Crystal
     end
 
     def remove_indirection
+      self
+    end
+
+    def remove_literal
       self
     end
 
@@ -597,15 +677,43 @@ module Crystal
       end
     end
 
-    def inspect(io)
+    # Adds an annotation with the given type and value
+    def add_annotation(annotation_type : AnnotationType, value : Annotation)
+      annotations = @annotations ||= {} of AnnotationType => Array(Annotation)
+      annotations[annotation_type] ||= [] of Annotation
+      annotations[annotation_type] << value
+    end
+
+    # Returns the last defined annotation with the given type, if any, or `nil` otherwise
+    def annotation(annotation_type) : Annotation?
+      @annotations.try &.[annotation_type]?.try &.last?
+    end
+
+    # Returns all annotations with the given type, if any, or `nil` otherwise
+    def annotations(annotation_type) : Array(Annotation)?
+      @annotations.try &.[annotation_type]?
+    end
+
+    def get_instance_var_initializer(name)
+      nil
+    end
+
+    # Checks whether an exception needs to be raised because of a restriction
+    # failure. Only overwriten by literal types (NumberLiteralType and
+    # SymbolLiteralType) when they produce an ambiguous call.
+    def check_restriction_exception
+      nil
+    end
+
+    def inspect(io : IO) : Nil
       to_s(io)
     end
 
-    def to_s(io)
+    def to_s(io : IO) : Nil
       to_s_with_options(io)
     end
 
-    abstract def to_s_with_options(io : IO, skip_union_parens : Bool = false, generic_args : Bool = true, codegen = false)
+    abstract def to_s_with_options(io : IO, skip_union_parens : Bool = false, generic_args : Bool = true, codegen : Bool = false) : Nil
 
     def pretty_print(pp)
       pp.text to_s
@@ -613,7 +721,7 @@ module Crystal
   end
 
   # A type that has a name and can be inside a namespace.
-  # For example, given  `class Foo::Bar`, `Foo` is the namespace and `Bar` is the name.
+  # For example, given `class Foo::Bar`, `Foo` is the namespace and `Bar` is the name.
   #
   # There are other types that have a name but it can be deduced from other(s) type(s),
   # so they don't inherit NamedType: a union type, a metaclass, etc.
@@ -640,7 +748,7 @@ module Crystal
       @types
     end
 
-    def append_full_name(io, codegen = false)
+    def append_full_name(io : IO, codegen : Bool = false) : Nil
       case namespace
       when Program
         # Skip
@@ -662,7 +770,7 @@ module Crystal
       String.build { |io| append_full_name(io) }
     end
 
-    def to_s_with_options(io : IO, skip_union_parens : Bool = false, generic_args : Bool = true, codegen = false)
+    def to_s_with_options(io : IO, skip_union_parens : Bool = false, generic_args : Bool = true, codegen : Bool = false) : Nil
       append_full_name(io, codegen: codegen)
     end
   end
@@ -735,10 +843,6 @@ module Crystal
     def add_def(a_def)
       a_def.owner = self
 
-      if a_def.visibility.public? && a_def.name == "initialize"
-        a_def.visibility = Visibility::Protected
-      end
-
       item = DefWithMetadata.new(a_def)
 
       defs = (@defs ||= {} of String => Array(DefWithMetadata))
@@ -746,51 +850,57 @@ module Crystal
       list.each_with_index do |ex_item, i|
         if item.restriction_of?(ex_item, self)
           if ex_item.restriction_of?(item, self)
+            # The two defs have the same signature so item overrides ex_item.
             list[i] = item
             a_def.previous = ex_item
             a_def.doc ||= ex_item.def.doc
             ex_item.def.next = a_def
             return ex_item.def
           else
+            # item has a new signature, stricter than ex_item.
             list.insert(i, item)
             return nil
           end
         end
       end
+
+      # item has a new signature, less strict than the existing defs with same name.
       list << item
 
       nil
     end
 
-    def add_macro(a_def)
-      case a_def.name
+    def add_macro(a_macro)
+      case a_macro.name
       when "inherited"
-        return add_hook :inherited, a_def
+        return add_hook :inherited, a_macro
       when "included"
-        return add_hook :included, a_def
+        return add_hook :included, a_macro
       when "extended"
-        return add_hook :extended, a_def
+        return add_hook :extended, a_macro
       when "method_added"
-        return add_hook :method_added, a_def, args_size: 1
+        return add_hook :method_added, a_macro, args_size: 1
       when "method_missing"
-        if a_def.args.size != 1
+        if a_macro.args.size != 1
           raise TypeException.new "macro 'method_missing' expects 1 argument (call)"
         end
       end
 
       macros = (@macros ||= {} of String => Array(Macro))
-      array = (macros[a_def.name] ||= [] of Macro)
-      index = array.index { |existing_macro| a_def.overrides?(existing_macro) }
+      array = (macros[a_macro.name] ||= [] of Macro)
+      index = array.index { |existing_macro| a_macro.overrides?(existing_macro) }
       if index
-        a_def.doc ||= array[index].doc
-        array[index] = a_def
+        # a_macro has the same signature of an existing macro, we override it.
+        a_macro.doc ||= array[index].doc
+        array[index] = a_macro
       else
-        array.push a_def
+        # a_macro has a new signature, add it with the others.
+        array << a_macro
       end
     end
 
-    def add_hook(kind, a_def, args_size = 0)
-      if a_def.args.size != args_size
+    def add_hook(kind, a_macro, args_size = 0)
+      if a_macro.args.size != args_size
         case args_size
         when 0
           raise TypeException.new "macro '#{kind}' must not have arguments"
@@ -802,7 +912,7 @@ module Crystal
       end
 
       hooks = @hooks ||= [] of Hook
-      hooks << Hook.new(kind, a_def)
+      hooks << Hook.new(kind, a_macro)
     end
 
     def filter_by_responds_to(name)
@@ -878,7 +988,7 @@ module Crystal
     end
 
     def remove_subclass_observer(observer)
-      @subclass_observers.try &.delete(observer)
+      @subclass_observers.try &.reject! &.same?(observer)
     end
 
     def notify_subclass_added
@@ -911,7 +1021,7 @@ module Crystal
       if !meta_vars && !self.is_a?(GenericType)
         meta_vars = MetaVars.new
         visitor = MainVisitor.new(program, vars: meta_vars, meta_vars: meta_vars)
-        visitor.scope = self
+        visitor.scope = self.metaclass
         value = value.clone
         value.accept visitor
       end
@@ -935,6 +1045,20 @@ module Crystal
       @instance_vars_initializers.try(&.any? { |init| init.name == name }) ||
         ancestors.any?(&.has_instance_var_initializer?(name))
     end
+
+    def get_instance_var_initializer(name)
+      match = @instance_vars_initializers.try &.find do |init|
+        init.name == name
+      end
+      return match if match
+
+      ancestors.each do |ancestor|
+        match = ancestor.get_instance_var_initializer(name)
+        return match if match
+      end
+
+      nil
+    end
   end
 
   # A type that can have instance variables.
@@ -942,7 +1066,7 @@ module Crystal
     getter(instance_vars) { {} of String => MetaTypeVar }
   end
 
-  # A non generic module type, like IO.
+  # A non generic module type.
   class NonGenericModuleType < ModuleType
     include InstanceVarContainer
     include ClassVarContainer
@@ -1032,7 +1156,7 @@ module Crystal
     getter depth : Int32
     property? :abstract; @abstract = false
     property? :struct; @struct = false
-    property? allowed_in_generics = true
+    property? can_be_stored = true
     property? lookup_new_in_ancestors = false
 
     property? extern = false
@@ -1168,7 +1292,34 @@ module Crystal
     end
 
     def normal_rank
-      (@rank - 1) / 2
+      (@rank - 1) // 2
+    end
+
+    def range
+      case kind
+      when :i8
+        {Int8::MIN, Int8::MAX}
+      when :i16
+        {Int16::MIN, Int16::MAX}
+      when :i32
+        {Int32::MIN, Int32::MAX}
+      when :i64
+        {Int64::MIN, Int64::MAX}
+      when :i128
+        {Int128::MIN, Int128::MAX}
+      when :u8
+        {UInt8::MIN, UInt8::MAX}
+      when :u16
+        {UInt16::MIN, UInt16::MAX}
+      when :u32
+        {UInt32::MIN, UInt32::MAX}
+      when :u64
+        {UInt64::MIN, UInt64::MAX}
+      when :u128
+        {UInt128::MIN, UInt128::MAX}
+      else
+        raise "Bug: called 'range' for non-integer literal"
+      end
     end
   end
 
@@ -1181,6 +1332,17 @@ module Crystal
 
     def kind
       @bytes == 4 ? :f32 : :f64
+    end
+
+    def range
+      case kind
+      when :f32
+        {Float32::MIN, Float32::MAX}
+      when :f64
+        {Float64::MIN, Float64::MAX}
+      else
+        raise "Bug: called 'range' for non-float literal"
+      end
     end
   end
 
@@ -1198,6 +1360,77 @@ module Crystal
   end
 
   class VoidType < NamedType
+  end
+
+  abstract class LiteralType < Type
+    # The most exact match type, or the first match otherwise
+    @match : Type?
+
+    # All matches. It's nil if `@match` is an exact match.
+    @all_matches : Set(Type)?
+
+    def set_exact_match(type)
+      @match = type
+      @all_matches = nil
+    end
+
+    def add_match(type)
+      if (match = @match) && match != type
+        all_matches = @all_matches
+        if all_matches.nil?
+          all_matches = @all_matches = Set(Type).new
+          all_matches << match
+        end
+        all_matches << type
+      else
+        @match = type
+      end
+    end
+
+    def exact_match?
+      literal.type == @match
+    end
+
+    def remove_literal
+      literal.type
+    end
+
+    def check_restriction_exception
+      if all_matches = @all_matches
+        literal.raise "ambiguous call, implicit cast of #{literal} matches all of #{all_matches.join(", ")}"
+      end
+    end
+  end
+
+  # Type for a number literal: it has the specific type of the number literal
+  # but can also match other types (like ints and floats) if the literal
+  # fits in those types.
+  class NumberLiteralType < LiteralType
+    # The literal associated with this type
+    getter literal : NumberLiteral
+
+    def initialize(program, @literal)
+      super(program)
+    end
+
+    def to_s_with_options(io : IO, skip_union_parens : Bool = false, generic_args : Bool = true, codegen : Bool = false) : Nil
+      io << @literal.type
+    end
+  end
+
+  # Type for a symbol literal: it has the specific type of the symbol literal (SymbolType)
+  # but can also match enums if their members match the symbol's name.
+  class SymbolLiteralType < LiteralType
+    # The literal associated with this type
+    getter literal : SymbolLiteral
+
+    def initialize(program, @literal)
+      super(program)
+    end
+
+    def to_s_with_options(io : IO, skip_union_parens : Bool = false, generic_args : Bool = true, codegen : Bool = false) : Nil
+      io << @literal.type
+    end
   end
 
   # Any thing that can be passed as a generic type variable.
@@ -1288,23 +1521,23 @@ module Crystal
         else
           instance_var_type = ivar_type.replace_type_parameters(instance)
         end
-        instance.declare_instance_var(name, instance_var_type)
+        instance.declare_instance_var(name, instance_var_type, ivar.annotations)
       end
 
       run_instance_vars_initializers self, self, instance
 
       instance.after_initialize
 
-      # Notify modules that an instance was added
-      notify_parent_modules_subclass_added(self)
+      # Notify parents that an instance was added
+      notify_parents_subclass_added(self)
 
       instance
     end
 
-    def notify_parent_modules_subclass_added(type)
+    def notify_parents_subclass_added(type)
       type.parents.try &.each do |parent|
-        parent.notify_subclass_added if parent.is_a?(NonGenericModuleType)
-        notify_parent_modules_subclass_added parent
+        parent.notify_subclass_added if parent.is_a?(SubclassObservable)
+        notify_parents_subclass_added parent
       end
     end
 
@@ -1350,10 +1583,19 @@ module Crystal
     def run_instance_var_initializer(initializer, instance : GenericClassInstanceType | NonGenericClassType)
       meta_vars = MetaVars.new
       visitor = MainVisitor.new(program, vars: meta_vars, meta_vars: meta_vars)
-      visitor.scope = instance
+      visitor.scope = instance.metaclass
       value = initializer.value.clone
       value.accept visitor
       instance_var = instance.lookup_instance_var(initializer.name)
+
+      # Check if automatic cast can be done
+      if instance_var.type != value.type &&
+         (value.is_a?(NumberLiteral) || value.is_a?(SymbolLiteral))
+        if casted_value = MainVisitor.check_automatic_cast(value, instance_var.type)
+          value = casted_value
+        end
+      end
+
       instance_var.bind_to(value)
       instance.add_instance_var_initializer(initializer.name, value, meta_vars)
     end
@@ -1435,7 +1677,7 @@ module Crystal
       true
     end
 
-    def to_s_with_options(io : IO, skip_union_parens : Bool = false, generic_args : Bool = true, codegen = false)
+    def to_s_with_options(io : IO, skip_union_parens : Bool = false, generic_args : Bool = true, codegen : Bool = false) : Nil
       io << @name
     end
   end
@@ -1464,8 +1706,8 @@ module Crystal
       super(program)
     end
 
-    def to_s_with_options(io : IO, skip_union_parens : Bool = false, generic_args : Bool = true, codegen = false)
-      io << "*" << @splatted_type
+    def to_s_with_options(io : IO, skip_union_parens : Bool = false, generic_args : Bool = true, codegen : Bool = false) : Nil
+      io << '*' << @splatted_type
     end
   end
 
@@ -1482,7 +1724,7 @@ module Crystal
       true
     end
 
-    def allowed_in_generics?
+    def can_be_stored?
       false
     end
 
@@ -1507,12 +1749,12 @@ module Crystal
       add_instance_var_initializer @including_types, name, value, meta_vars
     end
 
-    def to_s_with_options(io : IO, skip_union_parens : Bool = false, generic_args : Bool = true, codegen = false)
+    def to_s_with_options(io : IO, skip_union_parens : Bool = false, generic_args : Bool = true, codegen : Bool = false) : Nil
       super
       if generic_args
-        io << "("
+        io << '('
         type_vars.join(", ", io, &.to_s(io))
-        io << ")"
+        io << ')'
       end
     end
   end
@@ -1530,7 +1772,7 @@ module Crystal
       true
     end
 
-    def allowed_in_generics?
+    def can_be_stored?
       false
     end
 
@@ -1567,12 +1809,12 @@ module Crystal
       end
     end
 
-    def to_s_with_options(io : IO, skip_union_parens : Bool = false, generic_args : Bool = true, codegen = false)
+    def to_s_with_options(io : IO, skip_union_parens : Bool = false, generic_args : Bool = true, codegen : Bool = false) : Nil
       super
       if generic_args
-        io << "("
+        io << '('
         type_vars.join(", ", io, &.to_s(io))
-        io << ")"
+        io << ')'
       end
     end
   end
@@ -1605,12 +1847,14 @@ module Crystal
     getter generic_type : GenericType
     getter type_vars : Hash(String, ASTNode)
 
+    delegate :annotation, :annotations, to: generic_type
+
     def initialize(program, @generic_type, @type_vars)
       super(program)
     end
 
     def class_var_owner
-      generic_type
+      generic_type.class_var_owner
     end
 
     def parents
@@ -1694,9 +1938,9 @@ module Crystal
       false
     end
 
-    def to_s_with_options(io : IO, skip_union_parens : Bool = false, generic_args : Bool = true, codegen = false)
+    def to_s_with_options(io : IO, skip_union_parens : Bool = false, generic_args : Bool = true, codegen : Bool = false) : Nil
       generic_type.append_full_name(io)
-      io << "("
+      io << '('
       type_vars.each_value.with_index do |type_var, i|
         io << ", " if i > 0
         if type_var.is_a?(Var)
@@ -1715,7 +1959,7 @@ module Crystal
           type_var.to_s(io)
         end
       end
-      io << ")"
+      io << ')'
     end
   end
 
@@ -1954,7 +2198,7 @@ module Crystal
       instance
     end
 
-    def allowed_in_generics?
+    def can_be_stored?
       false
     end
 
@@ -1988,7 +2232,10 @@ module Crystal
 
     def implements?(other : Type)
       if other.is_a?(ProcInstanceType)
-        if (self.return_type.no_return? || other.return_type.void?) &&
+        # - Proc(..., NoReturn) can be cast to Proc(..., T)
+        # - Anything can be cast to Proc(..., Void)
+        # - Anything can be cast to Proc(..., Nil)
+        if (self.return_type.no_return? || other.return_type.void? || other.return_type.nil_type?) &&
            arg_types == other.arg_types
           return true
         end
@@ -1996,7 +2243,7 @@ module Crystal
       super
     end
 
-    def to_s_with_options(io : IO, skip_union_parens : Bool = false, generic_args : Bool = true, codegen = false)
+    def to_s_with_options(io : IO, skip_union_parens : Bool = false, generic_args : Bool = true, codegen : Bool = false) : Nil
       io << "Proc("
       arg_types.each do |type|
         type = type.devirtualize unless codegen
@@ -2006,7 +2253,7 @@ module Crystal
       return_type = self.return_type
       return_type = return_type.devirtualize unless codegen
       return_type.to_s_with_options(io, codegen: codegen)
-      io << ")"
+      io << ')'
     end
   end
 
@@ -2109,13 +2356,13 @@ module Crystal
       tuple_types.any? &.unbound?
     end
 
-    def to_s_with_options(io : IO, skip_union_parens : Bool = false, generic_args : Bool = true, codegen = false)
+    def to_s_with_options(io : IO, skip_union_parens : Bool = false, generic_args : Bool = true, codegen : Bool = false) : Nil
       io << "Tuple("
       @tuple_types.join(", ", io) do |tuple_type|
         tuple_type = tuple_type.devirtualize unless codegen
         tuple_type.to_s_with_options(io, skip_union_parens: true, codegen: codegen)
       end
-      io << ")"
+      io << ')'
     end
 
     def type_desc
@@ -2222,7 +2469,11 @@ module Crystal
       entries.any? &.type.unbound?
     end
 
-    def to_s_with_options(io : IO, skip_union_parens : Bool = false, generic_args : Bool = true, codegen = false)
+    def has_in_type_vars?(type)
+      entries.any? { |entry| entry.type.includes_type?(type) || entry.type.has_in_type_vars?(type) }
+    end
+
+    def to_s_with_options(io : IO, skip_union_parens : Bool = false, generic_args : Bool = true, codegen : Bool = false) : Nil
       io << "NamedTuple("
       @entries.join(", ", io) do |entry|
         if Symbol.needs_quotes?(entry.name)
@@ -2235,7 +2486,7 @@ module Crystal
         entry_type = entry_type.devirtualize unless codegen
         entry_type.to_s_with_options(io, skip_union_parens: true, codegen: codegen)
       end
-      io << ")"
+      io << ')'
     end
 
     def type_desc
@@ -2245,17 +2496,13 @@ module Crystal
 
   # A lib type, like `lib LibC`.
   class LibType < ModuleType
-    getter link_attributes : Array(LinkAttribute)?
+    getter link_annotations : Array(LinkAnnotation)?
     property? used = false
     property call_convention : LLVM::CallConvention?
 
-    def add_link_attributes(link_attributes)
-      if link_attributes
-        my_link_attributes = @link_attributes ||= [] of LinkAttribute
-        link_attributes.each do |attr|
-          my_link_attributes << attr unless my_link_attributes.includes?(attr)
-        end
-      end
+    def add_link_annotation(link_annotation : LinkAnnotation)
+      link_annotations = @link_annotations ||= [] of LinkAnnotation
+      link_annotations << link_annotation unless link_annotations.includes?(link_annotation)
     end
 
     def metaclass
@@ -2300,8 +2547,12 @@ module Crystal
       super(program, namespace, name)
     end
 
-    delegate remove_typedef, remove_indirection, pointer?, defs,
+    delegate remove_typedef, pointer?, defs,
       macros, reference_link?, parents, to: typedef
+
+    def remove_indirection
+      self
+    end
 
     def type_def_type?
       true
@@ -2364,10 +2615,10 @@ module Crystal
       end
     end
 
-    def allowed_in_generics?
+    def can_be_stored?
       process_value
       if aliased_type = @aliased_type
-        aliased_type.remove_alias.allowed_in_generics?
+        aliased_type.remove_alias.can_be_stored?
       else
         true
       end
@@ -2415,15 +2666,13 @@ module Crystal
     include ClassVarContainer
 
     getter base_type : IntegerType
-    getter? flags : Bool
+    property? flags = false
 
-    def initialize(program, namespace, name, @base_type, flags)
+    def initialize(program, namespace, name, @base_type)
       super(program, namespace, name)
 
-      @flags = !!flags
-
       add_def Def.new("value", [] of Arg, Primitive.new("enum_value", @base_type))
-      metaclass.as(ModuleType).add_def Def.new("new", [Arg.new("value", type: @base_type)], Primitive.new("enum_new", self))
+      metaclass.as(ModuleType).add_def Def.new("new", [Arg.new("value", restriction: Path.global(@base_type.to_s))], Primitive.new("enum_new", self))
     end
 
     def parents
@@ -2445,16 +2694,32 @@ module Crystal
       true
     end
 
+    def find_member(name)
+      name = name.underscore
+      types.each do |member_name, member|
+        if name == member_name.underscore
+          return member.as(Const)
+        end
+      end
+      nil
+    end
+
     def type_desc
       "enum"
     end
   end
 
+  class AnnotationType < NamedType
+    def type_desc
+      "annotation"
+    end
+  end
+
   # A metaclass type, that results from invoking `.class` on a type.
   #
-  # For example `String:Class` is the metaclass of `String`, and it's
+  # For example `String.class` is the metaclass of `String`, and it's
   # the type of `String` (the type of `"foo"` is `String`, the type of
-  # `String` is `String:Class`).
+  # `String` is `String.class`).
   #
   # This metaclass represents only the metaclass of non-generic types.
   class MetaclassType < ClassType
@@ -2474,7 +2739,7 @@ module Crystal
         if instance_type.module?
           name = "#{@instance_type}:Module"
         else
-          name = "#{@instance_type}:Class"
+          name = "#{@instance_type}.class"
         end
       end
       super(program, program, name, super_class)
@@ -2488,7 +2753,7 @@ module Crystal
       type_var?, to: instance_type
 
     def class_var_owner
-      instance_type
+      instance_type.class_var_owner
     end
 
     def virtual_type
@@ -2510,12 +2775,12 @@ module Crystal
       instance_type.replace_type_parameters(instance).metaclass
     end
 
-    def to_s_with_options(io : IO, skip_union_parens : Bool = false, generic_args : Bool = true, codegen = false)
+    def to_s_with_options(io : IO, skip_union_parens : Bool = false, generic_args : Bool = true, codegen : Bool = false) : Nil
       io << @name
     end
   end
 
-  # The metaclass of a generic class instance type, like `Array(String):Class`
+  # The metaclass of a generic class instance type, like `Array(String).class`
   class GenericClassInstanceMetaclassType < Type
     include DefInstanceContainer
 
@@ -2529,14 +2794,14 @@ module Crystal
       # Nothing
     end
 
-    @parents : Array(Type)?
-
     def parents
-      @parents ||= begin
-        parents = [] of Type
-        parents << (instance_type.superclass.try(&.metaclass) || program.class_type)
-        parents
+      instance_type.generic_type.metaclass.parents.try &.map do |parent|
+        parent.replace_type_parameters(instance_type)
       end
+    end
+
+    def replace_type_parameters(instance_type)
+      self.instance_type.replace_type_parameters(instance_type).metaclass
     end
 
     def virtual_type
@@ -2551,7 +2816,7 @@ module Crystal
     delegate type_vars, abstract?, generic_nest, lookup_new_in_ancestors?, to: instance_type
 
     def class_var_owner
-      instance_type
+      instance_type.class_var_owner
     end
 
     def filter_by_responds_to(name)
@@ -2562,13 +2827,13 @@ module Crystal
       end
     end
 
-    def to_s_with_options(io : IO, skip_union_parens : Bool = false, generic_args : Bool = true, codegen = false)
+    def to_s_with_options(io : IO, skip_union_parens : Bool = false, generic_args : Bool = true, codegen : Bool = false) : Nil
       instance_type.to_s(io)
-      io << ":Class"
+      io << ".class"
     end
   end
 
-  # The metaclass of a generic module instance type, like `Enumerable(Int32):Class`
+  # The metaclass of a generic module instance type, like `Enumerable(Int32).class`
   class GenericModuleInstanceMetaclassType < Type
     include DefInstanceContainer
 
@@ -2583,19 +2848,25 @@ module Crystal
     end
 
     def parents
-      @parents ||= [program.class_type] of Type
+      instance_type.generic_type.metaclass.parents.try &.map do |parent|
+        parent.replace_type_parameters(instance_type)
+      end
+    end
+
+    def replace_type_parameters(instance_type)
+      self.instance_type.replace_type_parameters(instance_type).metaclass
     end
 
     delegate defs, macros, to: instance_type.generic_type.metaclass
     delegate type_vars, generic_nest, lookup_new_in_ancestors?, to: instance_type
 
     def class_var_owner
-      instance_type
+      instance_type.class_var_owner
     end
 
-    def to_s_with_options(io : IO, skip_union_parens : Bool = false, generic_args : Bool = true, codegen = false)
+    def to_s_with_options(io : IO, skip_union_parens : Bool = false, generic_args : Bool = true, codegen : Bool = false) : Nil
       instance_type.to_s(io)
-      io << ":Class"
+      io << ".class"
     end
   end
 
@@ -2623,7 +2894,11 @@ module Crystal
         unless type_var.is_a?(Type)
           type_var.raise "argument to Proc must be a type, not #{type_var}"
         end
-        type_var
+        # There's no need for types to be virtual because at the end
+        # `type_merge` will take care of that.
+        # The benefit is that if one writes `Union(T)`, that becomes exactly T
+        # and not T+ (which might lead to some inconsistencies).
+        type_var.devirtualize.as(Type)
       end
       program.type_merge(types) || program.no_return
     end
@@ -2682,9 +2957,21 @@ module Crystal
 
     def each_concrete_type
       union_types.each do |type|
-        if type.is_a?(VirtualType)
-          type.subtypes.each do |subtype|
-            yield subtype
+        if type.is_a?(VirtualType) || type.is_a?(VirtualMetaclassType)
+          type.each_concrete_type do |concrete_type|
+            yield concrete_type
+          end
+        elsif type.is_a?(ModuleType) || type.is_a?(GenericModuleInstanceType)
+          _type = type.remove_indirection
+          if _type.responds_to?(:concrete_types)
+            # do to recursion uncaptured block method
+            # we need to use concrete_types.each
+            # instead of each_concrete_types
+            _type.concrete_types.each do |concrete_type|
+              yield concrete_type
+            end
+          else
+            yield _type
           end
         else
           yield type
@@ -2730,8 +3017,8 @@ module Crystal
       program.type_merge(new_union_types) || program.no_return
     end
 
-    def to_s_with_options(io : IO, skip_union_parens : Bool = false, generic_args : Bool = true, codegen = false)
-      io << "(" unless skip_union_parens
+    def to_s_with_options(io : IO, skip_union_parens : Bool = false, generic_args : Bool = true, codegen : Bool = false) : Nil
+      io << '(' unless skip_union_parens
       union_types = @union_types
       # Make sure to put Nil at the end
       if nil_type_index = @union_types.index(&.nil_type?)
@@ -2742,7 +3029,7 @@ module Crystal
         type = type.devirtualize unless codegen
         type.to_s_with_options(io, codegen: codegen)
       end
-      io << ")" unless skip_union_parens
+      io << ')' unless skip_union_parens
     end
 
     def type_desc
@@ -2959,9 +3246,9 @@ module Crystal
       base_type.replace_type_parameters(instance).virtual_type
     end
 
-    def to_s_with_options(io : IO, skip_union_parens : Bool = false, generic_args : Bool = true, codegen = false)
+    def to_s_with_options(io : IO, skip_union_parens : Bool = false, generic_args : Bool = true, codegen : Bool = false) : Nil
       base_type.to_s(io)
-      io << "+"
+      io << '+'
     end
 
     def name
@@ -2970,6 +3257,7 @@ module Crystal
   end
 
   class VirtualMetaclassType < Type
+    include MultiType
     include DefInstanceContainer
     include VirtualTypeLookup
     include ClassVarContainer
@@ -2992,7 +3280,7 @@ module Crystal
       instance_type.leaf?
     end
 
-    # Given `Foo+:Class` returns `Foo` (not `Foo:Class`)
+    # Given `Foo+.class` returns `Foo` (not `Foo.class`)
     delegate base_type, to: instance_type
 
     delegate lookup_first_def, to: instance_type.metaclass
@@ -3025,15 +3313,21 @@ module Crystal
       base_type.implements?(other.base_type)
     end
 
-    def to_s_with_options(io : IO, skip_union_parens : Bool = false, generic_args : Bool = true, codegen = false)
+    def to_s_with_options(io : IO, skip_union_parens : Bool = false, generic_args : Bool = true, codegen : Bool = false) : Nil
       instance_type.to_s_with_options(io, codegen: codegen)
-      io << ":Class"
+      io << ".class"
     end
   end
 end
 
 private def add_to_including_types(type : Crystal::GenericType, all_types)
   type.generic_types.each_value do |generic_type|
+    # Unbound generic types are not concrete types
+    next if generic_type.unbound?
+
+    # Abstract types also shouldn't form the union of including types
+    next if generic_type.abstract?
+
     all_types << generic_type unless all_types.includes?(generic_type)
   end
   type.subclasses.each do |subclass|

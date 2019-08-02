@@ -1,4 +1,3 @@
-# Based on https://github.com/rust-lang/rust/blob/master/src/librustc_trans/trans/cabi.rs
 abstract class LLVM::ABI
   getter target_data : TargetData
   getter? osx : Bool
@@ -18,7 +17,7 @@ abstract class LLVM::ABI
   def size(type : Type, pointer_size)
     case type.kind
     when Type::Kind::Integer
-      (type.int_width + 7) / 8
+      (type.int_width + 7) // 8
     when Type::Kind::Float
       4
     when Type::Kind::Double
@@ -45,13 +44,13 @@ abstract class LLVM::ABI
 
   def align_offset(offset, type)
     align = align(type)
-    (offset + align - 1) / align * align
+    (offset + align - 1) // align * align
   end
 
   def align(type : Type, pointer_size)
     case type.kind
     when Type::Kind::Integer
-      (type.int_width + 7) / 8
+      (type.int_width + 7) // 8
     when Type::Kind::Float
       4
     when Type::Kind::Double

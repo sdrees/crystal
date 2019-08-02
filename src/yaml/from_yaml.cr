@@ -48,16 +48,26 @@ end
 
 {% for type in %w(Int8 Int16 Int32 Int64 UInt8 UInt16 UInt32 UInt64) %}
   def {{type.id}}.new(ctx : YAML::ParseContext, node : YAML::Nodes::Node)
-    {{type.id}}.new parse_scalar(ctx, node, Int64)
+    {{type.id}}.new! parse_scalar(ctx, node, Int64)
   end
 {% end %}
 
 def String.new(ctx : YAML::ParseContext, node : YAML::Nodes::Node)
-  parse_scalar(ctx, node, self)
+  ctx.read_alias(node, String) do |obj|
+    return obj
+  end
+
+  if node.is_a?(YAML::Nodes::Scalar)
+    value = node.value
+    ctx.record_anchor(node, value)
+    value
+  else
+    node.raise "Expected String, not #{node.class.name}"
+  end
 end
 
 def Float32.new(ctx : YAML::ParseContext, node : YAML::Nodes::Node)
-  parse_scalar(ctx, node, Float64).to_f32
+  parse_scalar(ctx, node, Float64).to_f32!
 end
 
 def Float64.new(ctx : YAML::ParseContext, node : YAML::Nodes::Node)
@@ -80,6 +90,31 @@ def Array.new(ctx : YAML::ParseContext, node : YAML::Nodes::Node)
 end
 
 def Array.new(ctx : YAML::ParseContext, node : YAML::Nodes::Node)
+  unless node.is_a?(YAML::Nodes::Sequence)
+    node.raise "Expected sequence, not #{node.class}"
+  end
+
+  node.each do |value|
+    yield T.new(ctx, value)
+  end
+end
+
+def Set.new(ctx : YAML::ParseContext, node : YAML::Nodes::Node)
+  ctx.read_alias(node, self) do |obj|
+    return obj
+  end
+
+  ary = new
+
+  ctx.record_anchor(node, ary)
+
+  new(ctx, node) do |element|
+    ary << element
+  end
+  ary
+end
+
+def Set.new(ctx : YAML::ParseContext, node : YAML::Nodes::Node)
   unless node.is_a?(YAML::Nodes::Sequence)
     node.raise "Expected sequence, not #{node.class}"
   end
@@ -192,12 +227,28 @@ def Union.new(ctx : YAML::ParseContext, node : YAML::Nodes::Node)
     node.raise("Error deserailizing alias")
   end
 
-  {% for type in T %}
-    begin
-      return {{type}}.new(ctx, node)
-    rescue YAML::ParseException
-      # Ignore
-    end
+  {% begin %}
+    # String must come last because anything can be parsed into a String.
+    # So, we give a chance first to types in the union to be parsed.
+    {% string_type = T.find { |type| type == ::String } %}
+
+    {% for type in T %}
+      {% unless type == string_type %}
+        begin
+          return {{type}}.new(ctx, node)
+        rescue YAML::ParseException
+          # Ignore
+        end
+      {% end %}
+    {% end %}
+
+    {% if string_type %}
+      begin
+        return {{string_type}}.new(ctx, node)
+      rescue YAML::ParseException
+        # Ignore
+      end
+    {% end %}
   {% end %}
 
   node.raise "Couldn't parse #{self}"
@@ -223,7 +274,7 @@ module Time::EpochConverter
       node.raise "Expected scalar, not #{node.class}"
     end
 
-    Time.epoch(node.value.to_i)
+    Time.unix(node.value.to_i)
   end
 end
 
@@ -233,7 +284,7 @@ module Time::EpochMillisConverter
       node.raise "Expected scalar, not #{node.class}"
     end
 
-    Time.epoch_ms(node.value.to_i64)
+    Time.unix_ms(node.value.to_i64)
   end
 end
 

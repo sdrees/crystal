@@ -32,6 +32,14 @@ describe "String" do
       "há日本語"[1..3].should eq("á日本")
     end
 
+    it "gets with range without end" do
+      "há日本語"[1..nil].should eq("á日本語")
+    end
+
+    it "gets with range without beginning" do
+      "há日本語"[nil..2].should eq("há日")
+    end
+
     it "gets when index is last and count is zero" do
       "foo"[3, 0].should eq("")
     end
@@ -140,6 +148,15 @@ describe "String" do
     it "gets with a string" do
       "FooBar"["Bar"].should eq "Bar"
       expect_raises(Exception, "Nil assertion failed") { "FooBar"["Baz"] }
+    end
+
+    it "gets with a char" do
+      expect_raises(Exception, "Nil assertion failed") { "foo/bar"['-'] }
+    end
+  end
+
+  describe "[]?" do
+    it "gets with a string" do
       "FooBar"["Bar"]?.should eq "Bar"
       "FooBar"["Baz"]?.should be_nil
     end
@@ -151,15 +168,25 @@ describe "String" do
       "foo/bar"['-']?.should be_nil
     end
 
-    it "gets with index and []?" do
+    it "gets with index" do
       "hello"[1]?.should eq('e')
       "hello"[5]?.should be_nil
       "hello"[-1]?.should eq('o')
       "hello"[-6]?.should be_nil
     end
 
-    it "returns nil with []? if pointing after last char which is non-ASCII" do
+    it "returns nil if pointing after last char which is non-ASCII" do
       "ß"[1]?.should be_nil
+    end
+
+    it "gets with range" do
+      "hello"[1..2]?.should eq "el"
+      "hello"[6..-1]?.should be_nil
+    end
+
+    it "gets with start and count" do
+      "hello"[1, 3]?.should eq("ell")
+      "hello"[6, 3]?.should be_nil
     end
   end
 
@@ -197,6 +224,7 @@ describe "String" do
 
   describe "to_i" do
     it { "1234".to_i.should eq(1234) }
+    it { "-128".to_i8.should eq(-128) }
     it { "   +1234   ".to_i.should eq(1234) }
     it { "   -1234   ".to_i.should eq(-1234) }
     it { "   +1234   ".to_i.should eq(1234) }
@@ -207,7 +235,16 @@ describe "String" do
     it { "0x123abc".to_i(prefix: true).should eq(1194684) }
     it { "0b1101".to_i(prefix: true).should eq(13) }
     it { "0b001101".to_i(prefix: true).should eq(13) }
-    it { "0123".to_i(prefix: true).should eq(83) }
+    it { "0123".to_i(prefix: true).should eq(123) }
+    it { "0o123".to_i(prefix: true).should eq(83) }
+    it { "0123".to_i(leading_zero_is_octal: true).should eq(83) }
+    it { "123".to_i(leading_zero_is_octal: true).should eq(123) }
+    it { "0o755".to_i(prefix: true, leading_zero_is_octal: true).should eq(493) }
+    it { "5".to_i(prefix: true).should eq(5) }
+    it { "0".to_i(prefix: true).should eq(0) }
+    it { "00".to_i(prefix: true).should eq(0) }
+    it { "00".to_i(leading_zero_is_octal: true).should eq(0) }
+    it { "00".to_i(prefix: true, leading_zero_is_octal: true).should eq(0) }
     it { "123hello".to_i(strict: false).should eq(123) }
     it { "99 red balloons".to_i(strict: false).should eq(99) }
     it { "   99 red balloons".to_i(strict: false).should eq(99) }
@@ -219,7 +256,10 @@ describe "String" do
     it { expect_raises(ArgumentError) { "0b123".to_i } }
     it { expect_raises(ArgumentError) { "000b123".to_i(prefix: true) } }
     it { expect_raises(ArgumentError) { "000x123".to_i(prefix: true) } }
+    it { expect_raises(ArgumentError) { "000o89a".to_i(prefix: true) } }
     it { expect_raises(ArgumentError) { "123hello".to_i } }
+    it { expect_raises(ArgumentError) { "0".to_i(leading_zero_is_octal: true) } }
+    it { expect_raises(ArgumentError) { "0o755".to_i(leading_zero_is_octal: true) } }
     it { "z".to_i(36).should eq(35) }
     it { "Z".to_i(36).should eq(35) }
     it { "0".to_i(62).should eq(0) }
@@ -494,6 +534,7 @@ describe "String" do
     it { "aeiou".upcase(Unicode::CaseOptions::Turkic).should eq("AEİOU") }
     it { "baﬄe".upcase.should eq("BAFFLE") }
     it { "ﬀ".upcase.should eq("FF") }
+    it { "ňž".upcase.should eq("ŇŽ") } # #7922
   end
 
   describe "capitalize" do
@@ -530,6 +571,42 @@ describe "String" do
     it { "hello\r\n".chomp("\n").should eq("hello") }
   end
 
+  describe "lchop" do
+    it { "".lchop.should eq("") }
+    it { "h".lchop.should eq("") }
+    it { "hello".lchop.should eq("ello") }
+    it { "かたな".lchop.should eq("たな") }
+
+    it { "hello".lchop('g').should eq("hello") }
+    it { "hello".lchop('h').should eq("ello") }
+    it { "かたな".lchop('か').should eq("たな") }
+
+    it { "".lchop("").should eq("") }
+    it { "hello".lchop("good").should eq("hello") }
+    it { "hello".lchop("hel").should eq("lo") }
+    it { "かたな".lchop("かた").should eq("な") }
+
+    it { "\n\n\n\nhello".lchop("").should eq("\n\n\n\nhello") }
+  end
+
+  describe "lchop?" do
+    it { "".lchop?.should be_nil }
+    it { "h".lchop?.should eq("") }
+    it { "hello".lchop?.should eq("ello") }
+    it { "かたな".lchop?.should eq("たな") }
+
+    it { "hello".lchop?('g').should be_nil }
+    it { "hello".lchop?('h').should eq("ello") }
+    it { "かたな".lchop?('か').should eq("たな") }
+
+    it { "".lchop?("").should eq("") }
+    it { "hello".lchop?("good").should be_nil }
+    it { "hello".lchop?("hel").should eq("lo") }
+    it { "かたな".lchop?("かた").should eq("な") }
+
+    it { "\n\n\n\nhello".lchop("").should eq("\n\n\n\nhello") }
+  end
+
   describe "rchop" do
     it { "".rchop.should eq("") }
     it { "foo".rchop.should eq("fo") }
@@ -544,25 +621,28 @@ describe "String" do
     it { "foo".rchop('o').should eq("fo") }
     it { "foo".rchop('x').should eq("foo") }
 
+    it { "".rchop("").should eq("") }
     it { "foobar".rchop("bar").should eq("foo") }
     it { "foobar".rchop("baz").should eq("foobar") }
   end
 
-  describe "lchomp" do
-    it { "".lchop.should eq("") }
-    it { "h".lchop.should eq("") }
-    it { "hello".lchop.should eq("ello") }
-    it { "かたな".lchop.should eq("たな") }
+  describe "rchop?" do
+    it { "".rchop?.should be_nil }
+    it { "foo".rchop?.should eq("fo") }
+    it { "foo\n".rchop?.should eq("foo") }
+    it { "foo\r".rchop?.should eq("foo") }
+    it { "foo\r\n".rchop?.should eq("foo\r") }
+    it { "\r\n".rchop?.should eq("\r") }
+    it { "かたな".rchop?.should eq("かた") }
+    it { "かたな\n".rchop?.should eq("かたな") }
+    it { "かたな\r\n".rchop?.should eq("かたな\r") }
 
-    it { "hello".lchop('g').should eq("hello") }
-    it { "hello".lchop('h').should eq("ello") }
-    it { "かたな".lchop('か').should eq("たな") }
+    it { "foo".rchop?('o').should eq("fo") }
+    it { "foo".rchop?('x').should be_nil }
 
-    it { "hello".lchop("good").should eq("hello") }
-    it { "hello".lchop("hel").should eq("lo") }
-    it { "かたな".lchop("かた").should eq("な") }
-
-    it { "\n\n\n\nhello".lchop("").should eq("\n\n\n\nhello") }
+    it { "".rchop?("").should eq("") }
+    it { "foobar".rchop?("bar").should eq("foo") }
+    it { "foobar".rchop?("baz").should be_nil }
   end
 
   describe "strip" do
@@ -870,7 +950,7 @@ describe "String" do
       it { "foo   ".split(' ').should eq(["foo", "", "", ""]) }
       it { "   foo  bar".split(' ').should eq(["", "", "", "foo", "", "bar"]) }
       it { "   foo   bar\n\t  baz   ".split(' ').should eq(["", "", "", "foo", "", "", "bar\n\t", "", "baz", "", "", ""]) }
-      it { "   foo   bar\n\t  baz   ".split(" ").should eq(["", "", "", "foo", "", "", "bar\n\t", "", "baz", "", "", ""]) }
+      it { "   foo   bar\n\t  baz   ".split(' ').should eq(["", "", "", "foo", "", "", "bar\n\t", "", "baz", "", "", ""]) }
       it { "foo,bar,baz,qux".split(',', 1).should eq(["foo,bar,baz,qux"]) }
       it { "foo,bar,baz,qux".split(',', 3).should eq(["foo", "bar", "baz,qux"]) }
       it { "foo,bar,baz,qux".split(',', 30).should eq(["foo", "bar", "baz", "qux"]) }
@@ -945,6 +1025,8 @@ describe "String" do
     it { "foobar".starts_with?("").should be_true }
     it { "foobar".starts_with?("foobarbaz").should be_false }
     it { "foobar".starts_with?("foox").should be_false }
+    it { "foobar".starts_with?(/foo/).should be_true }
+    it { "foobar".starts_with?(/bar/).should be_false }
     it { "foobar".starts_with?('f').should be_true }
     it { "foobar".starts_with?('g').should be_false }
     it { "よし".starts_with?('よ').should be_true }
@@ -956,6 +1038,8 @@ describe "String" do
     it { "foobar".ends_with?("").should be_true }
     it { "foobar".ends_with?("foobarbaz").should be_false }
     it { "foobar".ends_with?("xbar").should be_false }
+    it { "foobar".ends_with?(/bar/).should be_true }
+    it { "foobar".ends_with?(/foo|baz/).should be_false }
     it { "foobar".ends_with?('r').should be_true }
     it { "foobar".ends_with?('x').should be_false }
     it { "よし".ends_with?('し').should be_true }
@@ -992,56 +1076,37 @@ describe "String" do
     it { "hello world\\r\\n".delete("X-\\w").should eq("hello orldrn") }
 
     it "deletes one char" do
-      deleted = "foobar".delete('o')
-      deleted.bytesize.should eq(4)
-      deleted.should eq("fbar")
-
-      deleted = "foobar".delete('x')
-      deleted.bytesize.should eq(6)
-      deleted.should eq("foobar")
+      "foobar".delete('o').should eq("fbar")
+      "foobar".delete('x').should eq("foobar")
     end
   end
 
   it "reverses string" do
-    reversed = "foobar".reverse
-    reversed.bytesize.should eq(6)
-    reversed.should eq("raboof")
+    "foobar".reverse.should eq("raboof")
   end
 
   it "reverses utf-8 string" do
-    reversed = "こんいちは".reverse
-    reversed.bytesize.should eq(15)
-    reversed.size.should eq(5)
-    reversed.should eq("はちいんこ")
+    "こんいちは".reverse.should eq("はちいんこ")
   end
 
   it "reverses taking grapheme clusters into account" do
-    reversed = "noël".reverse
-    reversed.bytesize.should eq("noël".bytesize)
-    reversed.size.should eq("noël".size)
-    reversed.should eq("lëon")
+    "noël".reverse.should eq("lëon")
   end
 
   describe "sub" do
     it "subs char with char" do
-      replaced = "foobar".sub('o', 'e')
-      replaced.bytesize.should eq(6)
-      replaced.should eq("feobar")
+      "foobar".sub('o', 'e').should eq("feobar")
     end
 
     it "subs char with string" do
-      replaced = "foobar".sub('o', "ex")
-      replaced.bytesize.should eq(7)
-      replaced.should eq("fexobar")
+      "foobar".sub('o', "ex").should eq("fexobar")
     end
 
     it "subs char with string" do
       replaced = "foobar".sub do |char|
         char.should eq 'f'
         "some"
-      end
-      replaced.bytesize.should eq(9)
-      replaced.should eq("someoobar")
+      end.should eq("someoobar")
 
       empty = ""
       empty.sub { 'f' }.should be(empty)
@@ -1180,17 +1245,11 @@ describe "String" do
     end
 
     it "subs at index with char" do
-      string = "hello".sub(1, 'a')
-      string.should eq("hallo")
-      string.bytesize.should eq(5)
-      string.size.should eq(5)
+      "hello".sub(1, 'a').should eq("hallo")
     end
 
     it "subs at index with char, non-ascii" do
-      string = "あいうえお".sub(2, 'の')
-      string.should eq("あいのえお")
-      string.size.should eq(5)
-      string.bytesize.should eq("あいのえお".bytesize)
+      "あいうえお".sub(2, 'の').should eq("あいのえお")
     end
 
     it "subs at negative index with char" do
@@ -1201,66 +1260,57 @@ describe "String" do
     end
 
     it "subs at index with string" do
-      string = "hello".sub(1, "eee")
-      string.should eq("heeello")
-      string.bytesize.should eq(7)
-      string.size.should eq(7)
+      "hello".sub(1, "eee").should eq("heeello")
     end
 
     it "subs at negative index with string" do
-      string = "hello".sub(-1, "ooo")
-      string.should eq("hellooo")
-      string.bytesize.should eq(7)
-      string.size.should eq(7)
+      "hello".sub(-1, "ooo").should eq("hellooo")
     end
 
     it "subs at index with string, non-ascii" do
-      string = "あいうえお".sub(2, "けくこ")
-      string.should eq("あいけくこえお")
-      string.bytesize.should eq("あいけくこえお".bytesize)
-      string.size.should eq(7)
+      "あいうえお".sub(2, "けくこ").should eq("あいけくこえお")
     end
 
     it "subs range with char" do
-      string = "hello".sub(1..2, 'a')
-      string.should eq("halo")
-      string.bytesize.should eq(4)
-      string.size.should eq(4)
+      "hello".sub(1..2, 'a').should eq("halo")
     end
 
     it "subs range with char, non-ascii" do
-      string = "あいうえお".sub(1..2, 'け')
-      string.should eq("あけえお")
-      string.size.should eq(4)
-      string.bytesize.should eq("あけえお".bytesize)
+      "あいうえお".sub(1..2, 'け').should eq("あけえお")
     end
 
     it "subs range with string" do
-      string = "hello".sub(1..2, "eee")
-      string.should eq("heeelo")
-      string.size.should eq(6)
-      string.bytesize.should eq(6)
+      "hello".sub(1..2, "eee").should eq("heeelo")
     end
 
     it "subs range with string, non-ascii" do
-      string = "あいうえお".sub(1..2, "けくこ")
-      string.should eq("あけくこえお")
-      string.size.should eq(6)
-      string.bytesize.should eq("あけくこえお".bytesize)
+      "あいうえお".sub(1..2, "けくこ").should eq("あけくこえお")
+    end
+
+    it "subs endless range with char" do
+      "hello".sub(2..nil, 'a').should eq("hea")
+    end
+
+    it "subs endless range with string" do
+      "hello".sub(2..nil, "ya").should eq("heya")
+    end
+
+    it "subs beginless range with char" do
+      "hello".sub(nil..2, 'a').should eq("alo")
+    end
+
+    it "subs beginless range with string" do
+      "hello".sub(nil..2, "ye").should eq("yelo")
     end
   end
 
   describe "gsub" do
     it "gsubs char with char" do
-      replaced = "foobar".gsub('o', 'e')
-      replaced.bytesize.should eq(6)
-      replaced.should eq("feebar")
+      "foobar".gsub('o', 'e').should eq("feebar")
     end
 
     it "gsubs char with string" do
-      replaced = "foobar".gsub('o', "ex")
-      replaced.bytesize.should eq(8)
-      replaced.should eq("fexexbar")
+      "foobar".gsub('o', "ex").should eq("fexexbar")
     end
 
     it "gsubs char with string (nop)" do
@@ -1285,7 +1335,6 @@ describe "String" do
           char
         end
       end
-      replaced.bytesize.should eq(18)
       replaced.should eq("somethingthingbexr")
     end
 
@@ -1444,6 +1493,7 @@ describe "String" do
     "a".dump.should eq %("a")
     "\\".dump.should eq %("\\\\")
     "\"".dump.should eq %("\\\"")
+    "\a".dump.should eq %("\\a")
     "\b".dump.should eq %("\\b")
     "\e".dump.should eq %("\\e")
     "\f".dump.should eq %("\\f")
@@ -1471,6 +1521,7 @@ describe "String" do
     "a".inspect.should eq %("a")
     "\\".inspect.should eq %("\\\\")
     "\"".inspect.should eq %("\\\"")
+    "\a".inspect.should eq %("\\a")
     "\b".inspect.should eq %("\\b")
     "\e".inspect.should eq %("\\e")
     "\f".inspect.should eq %("\\f")
@@ -1494,23 +1545,27 @@ describe "String" do
     "\u{1f48e}".inspect_unquoted.should eq %(\u{1F48E})
   end
 
+  it "does pretty_inspect" do
+    "a".pretty_inspect.should eq(%("a"))
+    "hello\nworld".pretty_inspect.should eq(%("hello\\n" + "world"))
+    "hello\nworld".pretty_inspect(width: 9).should eq(%("hello\\n" +\n"world"))
+    "hello\nworld\n".pretty_inspect(width: 9).should eq(%("hello\\n" +\n"world\\n"))
+  end
+
   it "does *" do
-    str = "foo" * 10
-    str.bytesize.should eq(30)
-    str.should eq("foofoofoofoofoofoofoofoofoofoo")
+    ("foo" * 10).should eq("foofoofoofoofoofoofoofoofoofoo")
   end
 
   describe "+" do
     it "does for both ascii" do
       str = "foo" + "bar"
-      str.bytesize.should eq(6)
-      str.@length.should eq(6)
+      str.@length.should eq(6) # Check that it was pre-computed
       str.should eq("foobar")
     end
 
     it "does for both unicode" do
       str = "青い" + "旅路"
-      str.@length.should eq(4)
+      str.@length.should eq(4) # Check that it was pre-computed
       str.should eq("青い旅路")
     end
 
@@ -1518,16 +1573,12 @@ describe "String" do
       str = "foo"
       str2 = str + '/'
       str2.should eq("foo/")
-      str2.bytesize.should eq(4)
-      str2.size.should eq(4)
     end
 
     it "does with unicode char" do
       str = "fooba"
       str2 = str + 'る'
       str2.should eq("foobaる")
-      str2.bytesize.should eq(8)
-      str2.size.should eq(6)
     end
 
     it "does when right is empty" do
@@ -1642,6 +1693,7 @@ describe "String" do
   end
 
   it "escapes chars" do
+    "\a"[0].should eq('\a')
     "\b"[0].should eq('\b')
     "\t"[0].should eq('\t')
     "\n"[0].should eq('\n')
@@ -1670,6 +1722,12 @@ describe "String" do
 
   it "does char_at" do
     "いただきます".char_at(2).should eq('だ')
+    "foo".char_at(0).should eq('f')
+    "foo".char_at(4) { 'x' }.should eq('x')
+
+    expect_raises(IndexError) do
+      "foo".char_at(4)
+    end
   end
 
   it "does byte_at" do
@@ -1711,6 +1769,8 @@ describe "String" do
       "hello".tr("helo", "1212").should eq("12112")
       "this".tr("this", "ⓧ").should eq("ⓧⓧⓧⓧ")
       "über".tr("ü", "u").should eq("uber")
+      "aabbcc".tr("a", "xyz").should eq("xxbbcc")
+      "aabbcc".tr("a", "いろは").should eq("いいbbcc")
     end
 
     context "given no replacement characters" do
@@ -1764,6 +1824,13 @@ describe "String" do
   it "does camelcase" do
     "foo".camelcase.should eq("Foo")
     "foo_bar".camelcase.should eq("FooBar")
+    "foo".camelcase(lower: true).should eq("foo")
+    "foo_bar".camelcase(lower: true).should eq("fooBar")
+
+    "Foo".camelcase.should eq("Foo")
+    "Foo_bar".camelcase.should eq("FooBar")
+    "Foo".camelcase(lower: true).should eq("foo")
+    "Foo_bar".camelcase(lower: true).should eq("fooBar")
   end
 
   it "answers ascii_only?" do
@@ -1984,16 +2051,10 @@ describe "String" do
     iter.next.should eq('b')
     iter.next.should eq('c')
     iter.next.should be_a(Iterator::Stop)
-
-    iter.rewind
-    iter.next.should eq('a')
   end
 
   it "gets each_char with empty string" do
     iter = "".each_char
-    iter.next.should be_a(Iterator::Stop)
-
-    iter.rewind
     iter.next.should be_a(Iterator::Stop)
   end
 
@@ -2024,9 +2085,6 @@ describe "String" do
     iter.next.should eq('b'.ord)
     iter.next.should eq('c'.ord)
     iter.next.should be_a(Iterator::Stop)
-
-    iter.rewind
-    iter.next.should eq('a'.ord)
   end
 
   it "cycles bytes" do
@@ -2073,9 +2131,6 @@ describe "String" do
     iter.next.should eq("bar")
     iter.next.should eq("baz")
     iter.next.should be_a(Iterator::Stop)
-
-    iter.rewind
-    iter.next.should eq("foo")
   end
 
   it "gets each_line iterator with chomp = false" do
@@ -2084,9 +2139,6 @@ describe "String" do
     iter.next.should eq("bar\n")
     iter.next.should eq("baz\n")
     iter.next.should be_a(Iterator::Stop)
-
-    iter.rewind
-    iter.next.should eq("foo\n")
   end
 
   it "has yields to each_codepoint" do
@@ -2219,22 +2271,38 @@ describe "String" do
     end
   end
 
-  it "compares non-case insensitive" do
-    "fo".compare("foo").should eq(-1)
-    "foo".compare("fo").should eq(1)
-    "foo".compare("foo").should eq(0)
-    "foo".compare("fox").should eq(-1)
-    "fox".compare("foo").should eq(1)
-    "foo".compare("Foo").should eq(1)
-  end
+  describe "compare" do
+    it "compares case-sensitive" do
+      "fo".compare("foo").should eq(-1)
+      "foo".compare("fo").should eq(1)
+      "foo".compare("foo").should eq(0)
+      "foo".compare("fox").should eq(-1)
+      "fox".compare("foo").should eq(1)
+      "foo".compare("Foo").should eq(1)
+      "hällo".compare("Hällo").should eq(1)
+      "".compare("").should eq(0)
+    end
 
-  it "compares case insensitive" do
-    "fo".compare("FOO", case_insensitive: true).should eq(-1)
-    "foo".compare("FO", case_insensitive: true).should eq(1)
-    "foo".compare("FOO", case_insensitive: true).should eq(0)
-    "foo".compare("FOX", case_insensitive: true).should eq(-1)
-    "fox".compare("FOO", case_insensitive: true).should eq(1)
-    "fo\u{0000}".compare("FO", case_insensitive: true).should eq(1)
+    it "compares case-insensitive" do
+      "foo".compare("FO", case_insensitive: true).should eq(1)
+      "FOO".compare("fo", case_insensitive: true).should eq(1)
+      "fo".compare("FOO", case_insensitive: true).should eq(-1)
+      "FOX".compare("foo", case_insensitive: true).should eq(1)
+      "foo".compare("FOX", case_insensitive: true).should eq(-1)
+      "foo".compare("FOO", case_insensitive: true).should eq(0)
+      "hELLo".compare("HellO", case_insensitive: true).should eq(0)
+      "fo\u{0}".compare("FO", case_insensitive: true).should eq(1)
+      "fo".compare("FO\u{0}", case_insensitive: true).should eq(-1)
+      "\u{0}".compare("\u{0}", case_insensitive: true).should eq(0)
+      "z".compare("hello", case_insensitive: true).should eq(1)
+      "h".compare("zzz", case_insensitive: true).should eq(-1)
+      "ä".compare("äA", case_insensitive: true).should eq(-1)
+      "äÄ".compare("äÄ", case_insensitive: true).should eq(0)
+      "heIIo".compare("heııo", case_insensitive: true, options: Unicode::CaseOptions::Turkic).should eq(0)
+      "".compare("abc", case_insensitive: true).should eq(-1)
+      "abc".compare("", case_insensitive: true).should eq(1)
+      "abcA".compare("abca", case_insensitive: true).should eq(0)
+    end
   end
 
   it "builds with write_byte" do
@@ -2367,15 +2435,6 @@ describe "String" do
     string = "foo"
     clone = string.clone
     string.should be(clone)
-  end
-
-  it "#at" do
-    "foo".at(0).should eq('f')
-    "foo".at(4) { 'x' }.should eq('x')
-
-    expect_raises(IndexError) do
-      "foo".at(4)
-    end
   end
 
   it "allocates buffer of correct size when UInt8 is given to new (#3332)" do

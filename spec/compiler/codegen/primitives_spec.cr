@@ -55,15 +55,27 @@ describe "Code gen: primitives" do
   end
 
   it "codegens 1 + 2" do
-    run(%(1 + 2)).to_i.should eq(3)
+    run(%(require "prelude"; 1 + 2)).to_i.should eq(3)
   end
 
-  it "codegens 1 + 2" do
-    run(%(1 - 2)).to_i.should eq(-1)
+  it "codegens 1 &+ 2" do
+    run(%(1 &+ 2)).to_i.should eq(3)
+  end
+
+  it "codegens 1 - 2" do
+    run(%(require "prelude"; 1 - 2)).to_i.should eq(-1)
+  end
+
+  it "codegens 1 &- 2" do
+    run(%(1 &- 2)).to_i.should eq(-1)
   end
 
   it "codegens 2 * 3" do
-    run(%(2 * 3)).to_i.should eq(6)
+    run(%(require "prelude"; 2 * 3)).to_i.should eq(6)
+  end
+
+  it "codegens 2 &* 3" do
+    run(%(2 &* 3)).to_i.should eq(6)
   end
 
   it "codegens 8.unsafe_div 3" do
@@ -166,7 +178,7 @@ describe "Code gen: primitives" do
         fun foo : K
       end
 
-      Test.foo + 1
+      Test.foo &+ 1
       ))
   end
 

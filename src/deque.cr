@@ -11,7 +11,6 @@
 # [circular buffer](https://en.wikipedia.org/wiki/Circular_buffer).
 class Deque(T)
   include Indexable(T)
-  include Comparable(Deque)
 
   # This Deque is based on a circular buffer. It works like a normal array, but when an item is removed from the left
   # side, instead of shifting all the items, only the start position is shifted. This can lead to configurations like:
@@ -148,7 +147,7 @@ class Deque(T)
     @buffer[index] = value
   end
 
-  def unsafe_at(index : Int)
+  def unsafe_fetch(index : Int)
     index += @start
     index -= @capacity if index >= @capacity
     @buffer[index]
@@ -201,7 +200,7 @@ class Deque(T)
     found
   end
 
-  # Delete the item that is present at the *index*. Items to the right
+  # Deletes the item that is present at the *index*. Items to the right
   # of this one will have their indices decremented.
   # Raises `IndexError` if trying to delete an element outside the deque's range.
   #
@@ -224,7 +223,7 @@ class Deque(T)
     rindex -= @capacity if rindex >= @capacity
     value = @buffer[rindex]
 
-    if index > @size / 2
+    if index > @size // 2
       # Move following items to the left, starting with the first one
       # [56-01234] -> [6x-01235]
       dst = rindex
@@ -296,7 +295,7 @@ class Deque(T)
     rindex = @start + index
     rindex -= @capacity if rindex >= @capacity
 
-    if index > @size / 2
+    if index > @size // 2
       # Move following items to the right, starting with the last one
       # [56-01234] -> [4560123^]
       dst = @start + @size
@@ -330,11 +329,11 @@ class Deque(T)
     self
   end
 
-  def inspect(io : IO)
+  def inspect(io : IO) : Nil
     executed = exec_recursive(:inspect) do
       io << "Deque{"
       join ", ", io, &.inspect(io)
-      io << "}"
+      io << '}'
     end
     io << "Deque{...}" unless executed
   end
@@ -421,7 +420,7 @@ class Deque(T)
       @start = (@start + n) % @capacity
     else
       # Turn *n* into an equivalent index in range -size/2 .. size/2
-      half = @size / 2
+      half = @size // 2
       if n.abs >= half
         n = (n + half) % @size - half
       end
@@ -483,16 +482,7 @@ class Deque(T)
     self
   end
 
-  # Returns an `Array` (shallow copy) that contains all the items of this deque.
-  def to_a
-    arr = Array(T).new(@size)
-    each do |x|
-      arr << x
-    end
-    arr
-  end
-
-  def to_s(io : IO)
+  def to_s(io : IO) : Nil
     inspect(io)
   end
 

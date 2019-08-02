@@ -2,6 +2,8 @@ require "spec"
 require "json"
 require "big"
 require "big/json"
+require "uuid"
+require "uuid/json"
 
 enum JSONSpecEnum
   Zero
@@ -43,8 +45,34 @@ describe "JSON serialization" do
       Hash(String, Int32).from_json(%({"foo": 1, "bar": 2})).should eq({"foo" => 1, "bar" => 2})
     end
 
-    it "does Hash(String, Int32)#from_json and skips null" do
-      Hash(String, Int32).from_json(%({"foo": 1, "bar": 2, "baz": null})).should eq({"foo" => 1, "bar" => 2})
+    it "does Hash(Int32, String)#from_json" do
+      Hash(Int32, String).from_json(%({"1": "x", "2": "y"})).should eq({1 => "x", 2 => "y"})
+    end
+
+    it "does Hash(Float32, String)#from_json" do
+      Hash(Float32, String).from_json(%({"1.23": "x", "4.56": "y"})).should eq({1.23_f32 => "x", 4.56_f32 => "y"})
+    end
+
+    it "does Hash(Float64, String)#from_json" do
+      Hash(Float64, String).from_json(%({"1.23": "x", "4.56": "y"})).should eq({1.23 => "x", 4.56 => "y"})
+    end
+
+    it "does Hash(BigInt, String)#from_json" do
+      Hash(BigInt, String).from_json(%({"12345678901234567890": "x"})).should eq({"12345678901234567890".to_big_i => "x"})
+    end
+
+    it "does Hash(BigFloat, String)#from_json" do
+      Hash(BigFloat, String).from_json(%({"1234567890.123456789": "x"})).should eq({"1234567890.123456789".to_big_f => "x"})
+    end
+
+    it "does Hash(BigDecimal, String)#from_json" do
+      Hash(BigDecimal, String).from_json(%({"1234567890.123456789": "x"})).should eq({"1234567890.123456789".to_big_d => "x"})
+    end
+
+    it "raises an error Hash(String, Int32)#from_json with null value" do
+      expect_raises(JSON::ParseException, "Expected Int but was Null") do
+        Hash(String, Int32).from_json(%({"foo": 1, "bar": 2, "baz": null}))
+      end
     end
 
     it "does for Array(Int32) from IO" do
@@ -89,6 +117,24 @@ describe "JSON serialization" do
       big = BigFloat.from_json("1234")
       big.should be_a(BigFloat)
       big.should eq(BigFloat.new("1234"))
+    end
+
+    it "does for UUID (hyphenated)" do
+      uuid = UUID.from_json("\"ee843b26-56d8-472b-b343-0b94ed9077ff\"")
+      uuid.should be_a(UUID)
+      uuid.should eq(UUID.new("ee843b26-56d8-472b-b343-0b94ed9077ff"))
+    end
+
+    it "does for UUID (hex)" do
+      uuid = UUID.from_json("\"ee843b2656d8472bb3430b94ed9077ff\"")
+      uuid.should be_a(UUID)
+      uuid.should eq(UUID.new("ee843b26-56d8-472b-b343-0b94ed9077ff"))
+    end
+
+    it "does for UUID (urn)" do
+      uuid = UUID.from_json("\"urn:uuid:ee843b26-56d8-472b-b343-0b94ed9077ff\"")
+      uuid.should be_a(UUID)
+      uuid.should eq(UUID.new("ee843b26-56d8-472b-b343-0b94ed9077ff"))
     end
 
     it "does for BigDecimal from int" do
@@ -149,7 +195,9 @@ describe "JSON serialization" do
     end
 
     it "deserializes Time" do
+      Time.from_json(%("2016-11-16T09:55:48-03:00")).to_utc.should eq(Time.utc(2016, 11, 16, 12, 55, 48))
       Time.from_json(%("2016-11-16T09:55:48-0300")).to_utc.should eq(Time.utc(2016, 11, 16, 12, 55, 48))
+      Time.from_json(%("20161116T095548-03:00")).to_utc.should eq(Time.utc(2016, 11, 16, 12, 55, 48))
     end
 
     describe "parse exceptions" do
@@ -252,8 +300,24 @@ describe "JSON serialization" do
       {"foo" => 1, "bar" => 2}.to_json.should eq(%({"foo":1,"bar":2}))
     end
 
-    it "does for Hash with non-string keys" do
+    it "does for Hash with symbol keys" do
       {:foo => 1, :bar => 2}.to_json.should eq(%({"foo":1,"bar":2}))
+    end
+
+    it "does for Hash with int keys" do
+      {1 => 2, 3 => 6}.to_json.should eq(%({"1":2,"3":6}))
+    end
+
+    it "does for Hash with Float32 keys" do
+      {1.2_f32 => 2, 3.4_f32 => 6}.to_json.should eq(%({"1.2":2,"3.4":6}))
+    end
+
+    it "does for Hash with Float64 keys" do
+      {1.2 => 2, 3.4 => 6}.to_json.should eq(%({"1.2":2,"3.4":6}))
+    end
+
+    it "does for Hash with BigInt keys" do
+      {123.to_big_i => 2}.to_json.should eq(%({"123":2}))
     end
 
     it "does for Hash with newlines" do
@@ -280,6 +344,11 @@ describe "JSON serialization" do
     it "does for BigFloat" do
       big = BigFloat.new("1234.567891011121314")
       big.to_json.should eq("1234.567891011121314")
+    end
+
+    it "does for UUID" do
+      uuid = UUID.new("ee843b26-56d8-472b-b343-0b94ed9077ff")
+      uuid.to_json.should eq("\"ee843b26-56d8-472b-b343-0b94ed9077ff\"")
     end
   end
 
@@ -336,8 +405,15 @@ describe "JSON serialization" do
       {"foo" => {"bar" => 1}}.to_pretty_json(indent: " ").should eq(%({\n "foo": {\n  "bar": 1\n }\n}))
     end
 
-    it "does for time" do
-      Time.utc(2016, 11, 16, 12, 55, 48).to_json.should eq(%("2016-11-16T12:55:48+0000"))
+    describe "Time" do
+      it "#to_json" do
+        Time.utc(2016, 11, 16, 12, 55, 48).to_json.should eq(%("2016-11-16T12:55:48Z"))
+        Time.local(2016, 11, 16, 12, 55, 48, location: Time::Location.fixed(7200)).to_json.should eq(%("2016-11-16T12:55:48+02:00"))
+      end
+
+      it "omit sub-second precision" do
+        Time.utc(2016, 11, 16, 12, 55, 48, nanosecond: 123456789).to_json.should eq(%("2016-11-16T12:55:48Z"))
+      end
     end
   end
 end

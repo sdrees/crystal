@@ -3,19 +3,14 @@ require "c/string"
 
 lib LibC
   {% if flag?(:linux) %}
-    {% if flag?(:musl) %}
-      fun __errno_location : Int*
-    {% else %}
-      @[ThreadLocal]
-      $errno : Int
-    {% end %}
+    fun __errno_location : Int*
   {% elsif flag?(:darwin) || flag?(:freebsd) %}
     fun __error : Int*
   {% elsif flag?(:openbsd) %}
     fun __error = __errno : Int*
   {% elsif flag?(:win32) %}
-    fun _get_errno(value : Int*) : Int
-    fun _set_errno(value : Int) : Int
+    fun _get_errno(value : Int*) : ErrnoT
+    fun _set_errno(value : Int) : ErrnoT
   {% end %}
 end
 
@@ -204,8 +199,11 @@ class Errno < Exception
   # Returns the numeric value of errno.
   getter errno : Int32
 
-  # Creates a new Errno with the given message. The message will
-  # have concatenated the message denoted by `Errno#value`.
+  # Returns the message of errno.
+  getter errno_message : String
+
+  # Creates a new `Errno` with the given message. The message will
+  # have concatenated the errno message denoted by *errno*.
   #
   # Typical usage:
   #
@@ -217,22 +215,19 @@ class Errno < Exception
   # ```
   def initialize(message, errno = Errno.value)
     @errno = errno
-    super "#{message}: #{String.new(LibC.strerror(errno))}"
+    @errno_message = String.new(LibC.strerror(@errno))
+    super "#{message}: #{@errno_message}"
   end
 
   # Returns the value of libc's errno.
   def self.value : LibC::Int
     {% if flag?(:linux) %}
-      {% if flag?(:musl) %}
-        LibC.__errno_location.value
-      {% else %}
-        LibC.errno
-      {% end %}
+      LibC.__errno_location.value
     {% elsif flag?(:darwin) || flag?(:freebsd) || flag?(:openbsd) %}
       LibC.__error.value
     {% elsif flag?(:win32) %}
       ret = LibC._get_errno(out errno)
-      raise Errno.new("get_errno", ret) unless ret == 0
+      raise Errno.new("_get_errno", ret) unless ret == 0
       errno
     {% end %}
   end
@@ -240,16 +235,12 @@ class Errno < Exception
   # Sets the value of libc's errno.
   def self.value=(value)
     {% if flag?(:linux) %}
-      {% if flag?(:musl) %}
-        LibC.__errno_location.value = value
-      {% else %}
-        LibC.errno = value
-      {% end %}
+      LibC.__errno_location.value = value
     {% elsif flag?(:darwin) || flag?(:freebsd) || flag?(:openbsd) %}
       LibC.__error.value = value
     {% elsif flag?(:win32) %}
       ret = LibC._set_errno(value)
-      raise Errno.new("set_errno", ret) unless ret == 0
+      raise Errno.new("_set_errno", ret) unless ret == 0
       value
     {% end %}
   end

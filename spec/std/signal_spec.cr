@@ -24,5 +24,52 @@ describe "Signal" do
     Process.kill Signal::USR2, Process.pid
   end
 
+  it "CHLD.reset sets default Crystal child handler" do
+    Signal::CHLD.reset
+    child = Process.new("true", shell: true)
+    child.wait # doesn't block forever
+  end
+
+  it "CHLD.ignore sets default Crystal child handler" do
+    Signal::CHLD.ignore
+    child = Process.new("true", shell: true)
+    child.wait # doesn't block forever
+  end
+
+  it "CHLD.trap is called after default Crystal child handler" do
+    chan = Channel(Process).new
+
+    Signal::CHLD.trap do
+      child_process = chan.receive
+      Process.exists?(child_process.pid).should be_false
+    end
+
+    child = Process.new("true", shell: true)
+    child.wait # doesn't block forever
+    chan.send(child)
+  ensure
+    Signal::CHLD.reset
+  end
+
+  it "CHLD.reset removes previously set trap" do
+    call_count = 0
+
+    Signal::CHLD.trap do
+      call_count += 1
+    end
+
+    Process.new("true", shell: true).wait
+    Fiber.yield
+
+    call_count.should eq(1)
+
+    Signal::CHLD.reset
+
+    Process.new("true", shell: true).wait
+    Fiber.yield
+
+    call_count.should eq(1)
+  end
+
   # TODO: test Signal::X.reset
 end

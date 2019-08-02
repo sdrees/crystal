@@ -1,51 +1,36 @@
-require "spec"
 require "./spec_helper"
 
 class Time::Location
-  def __cached_range
-    @cached_range
-  end
-
-  def __cached_zone
-    @cached_zone
-  end
-
-  def __cached_zone=(zone)
-    @cached_zone = zone
-  end
-
-  def self.__clear_location_cache
-    @@location_cache.clear
-  end
-
   describe Time::Location do
     describe ".load" do
       it "loads Europe/Berlin" do
-        location = Location.load("Europe/Berlin")
+        with_zoneinfo do
+          location = Location.load("Europe/Berlin")
 
-        location.name.should eq "Europe/Berlin"
-        standard_time = location.lookup(Time.new(2017, 11, 22))
-        standard_time.name.should eq "CET"
-        standard_time.offset.should eq 3600
-        standard_time.dst?.should be_false
+          location.name.should eq "Europe/Berlin"
+          standard_time = location.lookup(Time.utc(2017, 11, 22))
+          standard_time.name.should eq "CET"
+          standard_time.offset.should eq 3600
+          standard_time.dst?.should be_false
 
-        summer_time = location.lookup(Time.new(2017, 10, 22))
-        summer_time.name.should eq "CEST"
-        summer_time.offset.should eq 7200
-        summer_time.dst?.should be_true
+          summer_time = location.lookup(Time.utc(2017, 10, 22))
+          summer_time.name.should eq "CEST"
+          summer_time.offset.should eq 7200
+          summer_time.dst?.should be_true
 
-        location.utc?.should be_false
-        location.fixed?.should be_false
+          location.utc?.should be_false
+          location.fixed?.should be_false
 
-        with_env("TZ", nil) do
-          location.local?.should be_false
+          with_env("TZ", nil) do
+            location.local?.should be_false
+          end
+
+          with_env("TZ", "Europe/Berlin") do
+            location.local?.should be_true
+          end
+
+          Location.load("Europe/Berlin", {ZONEINFO_ZIP}).should eq location
         end
-
-        with_env("TZ", "Europe/Berlin") do
-          location.local?.should be_true
-        end
-
-        Location.load?("Europe/Berlin", Crystal::System::Time.zone_sources).should eq location
       end
 
       it "invalid timezone identifier" do
@@ -57,35 +42,41 @@ class Time::Location
       end
 
       it "treats UTC as special case" do
-        Location.load("UTC").should eq Location::UTC
-        Location.load("").should eq Location::UTC
+        with_zoneinfo do
+          Location.load("UTC").should eq Location::UTC
+          Location.load("").should eq Location::UTC
 
-        # Etc/UTC could be pointing to anything
-        Location.load("Etc/UTC").should_not eq Location::UTC
+          # Etc/UTC could be pointing to anything
+          Location.load("Etc/UTC").should_not eq Location::UTC
+        end
       end
 
       describe "validating name" do
         it "absolute path" do
-          expect_raises(InvalidLocationNameError) do
-            Location.load("/America/New_York")
-          end
-          expect_raises(InvalidLocationNameError) do
-            Location.load("\\Zulu")
+          with_zoneinfo do
+            expect_raises(InvalidLocationNameError) do
+              Location.load("/America/New_York")
+            end
+            expect_raises(InvalidLocationNameError) do
+              Location.load("\\Zulu")
+            end
           end
         end
         it "dot dot" do
-          expect_raises(InvalidLocationNameError) do
-            Location.load("../zoneinfo/America/New_York")
-          end
-          expect_raises(InvalidLocationNameError) do
-            Location.load("a..")
+          with_zoneinfo do
+            expect_raises(InvalidLocationNameError) do
+              Location.load("../zoneinfo/America/New_York")
+            end
+            expect_raises(InvalidLocationNameError) do
+              Location.load("a..")
+            end
           end
         end
       end
 
       context "with ZONEINFO" do
         it "loads from custom directory" do
-          with_zoneinfo(File.join(__DIR__, "..", "data", "zoneinfo")) do
+          with_zoneinfo(datapath("zoneinfo")) do
             location = Location.load("Foo/Bar")
             location.name.should eq "Foo/Bar"
           end
@@ -108,7 +99,7 @@ class Time::Location
         end
 
         it "does not fall back to default sources" do
-          with_zoneinfo(File.join(__DIR__, "..", "data", "zoneinfo")) do
+          with_zoneinfo(datapath("zoneinfo")) do
             expect_raises(InvalidLocationNameError) do
               Location.load("Europe/Berlin")
             end
@@ -129,7 +120,7 @@ class Time::Location
         end
 
         it "loads new data if file was changed" do
-          zoneinfo_path = File.join(__DIR__, "..", "data", "zoneinfo")
+          zoneinfo_path = datapath("zoneinfo")
           with_zoneinfo(zoneinfo_path) do
             location1 = Location.load("Foo/Bar")
             File.touch(File.join(zoneinfo_path, "Foo/Bar"))
@@ -165,36 +156,67 @@ class Time::Location
         location.local?.should be_false
       end
 
-      zone = location.lookup(Time.now)
+      zone = location.lookup(Time.utc)
       zone.name.should eq "UTC"
       zone.offset.should eq 0
       zone.dst?.should be_false
     end
 
     it ".local" do
-      Location.local.should eq Location.load_local
+      with_zoneinfo do
+        Location.local.should eq Location.load_local
+      end
 
       Location.local = Location::UTC
       Location.local.should be Location::UTC
     end
 
-    it ".load_local" do
-      with_env("TZ", nil) do
-        Location.load_local.name.should eq "Local"
-      end
-      with_zoneinfo do
-        with_env("TZ", "Europe/Berlin") do
-          Location.load_local.name.should eq "Europe/Berlin"
+    describe ".load_local" do
+      it "with unset TZ" do
+        with_env("TZ", nil) do
+          # This should generally be `Local`, but if `/etc/localtime` doesn't exist,
+          # `Crystal::System::Time.load_localtime` can't resolve a local time zone,
+          # making the return value default to `UTC`.
+          {"Local", "UTC"}.should contain Location.load_local.name
         end
       end
-      with_env("TZ", "") do
-        Location.load_local.utc?.should be_true
+
+      it "with TZ" do
+        with_zoneinfo do
+          with_env("TZ", "Europe/Berlin") do
+            Location.load_local.name.should eq "Europe/Berlin"
+          end
+        end
+        with_zoneinfo(datapath("zoneinfo")) do
+          with_env("TZ", "Foo/Bar") do
+            Location.load_local.name.should eq "Foo/Bar"
+          end
+        end
+      end
+
+      it "with empty TZ" do
+        with_zoneinfo do
+          with_env("TZ", "") do
+            Location.load_local.utc?.should be_true
+          end
+        end
       end
     end
 
     describe ".fixed" do
-      it "accepts a name" do
-        location = Location.fixed("Fixed", 1800)
+      it "without name" do
+        location = Location.fixed -9012
+        location.name.should eq "-02:30:12"
+        location.zones.should eq [Zone.new(nil, -9012, false)]
+        location.transitions.size.should eq 0
+
+        location.utc?.should be_false
+        location.fixed?.should be_true
+        location.local?.should be_false
+      end
+
+      it "with name" do
+        location = Location.fixed "Fixed", 1800
         location.name.should eq "Fixed"
         location.zones.should eq [Zone.new("Fixed", 1800, false)]
         location.transitions.size.should eq 0
@@ -206,13 +228,13 @@ class Time::Location
 
       it "positive" do
         location = Location.fixed 8000
-        location.name.should eq "+02:13"
+        location.name.should eq "+02:13:20"
         location.zones.first.offset.should eq 8000
       end
 
-      it "ngeative" do
+      it "negative" do
         location = Location.fixed -7539
-        location.name.should eq "-02:05"
+        location.name.should eq "-02:05:39"
         location.zones.first.offset.should eq -7539
       end
 
@@ -230,7 +252,7 @@ class Time::Location
       it "looks up" do
         with_zoneinfo do
           location = Location.load("Europe/Berlin")
-          zone, range = location.lookup_with_boundaries(Time.utc(2017, 11, 23, 22, 6, 12).epoch)
+          zone, range = location.lookup_with_boundaries(Time.utc(2017, 11, 23, 22, 6, 12).to_unix)
           zone.should eq Zone.new("CET", 3600, false)
           range.should eq({1509238800_i64, 1521939600_i64})
         end
@@ -300,15 +322,15 @@ class Time::Location
         with_zoneinfo do
           location = Time::Location.load("Europe/Berlin")
 
-          location.__cached_range.should eq({Int64::MIN, Int64::MIN})
-          location.__cached_zone.should eq Zone.new("LMT", 3208, false)
+          location.@cached_range.should eq({Int64::MIN, Int64::MIN})
+          location.@cached_zone.should eq Zone.new("LMT", 3208, false)
 
           expected_zone = Zone.new("CET", 3600, false)
 
           location.lookup(Time.utc(2017, 11, 23, 22, 6, 12)).should eq expected_zone
 
-          location.__cached_range.should eq({1509238800_i64, 1521939600_i64})
-          location.__cached_zone.should eq expected_zone
+          location.@cached_range.should eq({1509238800_i64, 1521939600_i64})
+          location.@cached_zone.should eq expected_zone
         end
       end
 
@@ -322,6 +344,20 @@ class Time::Location
           location.lookup(Time.utc(2017, 11, 23, 22, 6, 12)).should eq cached_zone
         end
       end
+    end
+  end
+
+  describe Time::Location::Zone do
+    it "#inspect" do
+      Time::Location::Zone.new("CET", 3600, false).inspect.should eq "Time::Location::Zone(CET +01:00 (3600s) STD)"
+      Time::Location::Zone.new("CEST", 7200, true).inspect.should eq "Time::Location::Zone(CEST +02:00 (7200s) DST)"
+      Time::Location::Zone.new(nil, 9000, true).inspect.should eq "Time::Location::Zone(+02:30 (9000s) DST)"
+      Time::Location::Zone.new(nil, 9012, true).inspect.should eq "Time::Location::Zone(+02:30:12 (9012s) DST)"
+    end
+
+    it "#name" do
+      Time::Location::Zone.new("CEST", 7200, true).name.should eq "CEST"
+      Time::Location::Zone.new(nil, 9000, true).name.should eq "+02:30"
     end
   end
 end

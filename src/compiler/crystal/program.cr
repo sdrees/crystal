@@ -44,7 +44,7 @@ module Crystal
     #
     # The way we detect this is by remembering the type of the splat,
     # associated to a def's object id (the UInt64), and on an instantiation
-    # we compare the new type with the previous one and check if if contains
+    # we compare the new type with the previous one and check if it contains
     # the previous type.
     getter splat_expansions = {} of UInt64 => Type
 
@@ -110,8 +110,22 @@ module Crystal
     # The main filename of this program
     property filename : String?
 
-    # Set to a `ProgressTracker` object which tracks compilation progress.
+    # A `ProgressTracker` object which tracks compilation progress.
     property progress_tracker = ProgressTracker.new
+
+    property codegen_target = Config.default_target
+
+    # Which kind of warnings wants to be detected.
+    property warnings : Warnings = Warnings::None
+
+    # Paths to ignore for warnings detection.
+    property warnings_exclude : Array(String) = [] of String
+
+    # Detected warning failures.
+    property warning_failures = [] of String
+
+    # If `true` compiler will error if warnings are found.
+    property error_on_warnings : Bool = false
 
     def initialize
       super(self, self, "main")
@@ -121,11 +135,11 @@ module Crystal
       types = self.types
 
       types["Object"] = object = @object = NonGenericClassType.new self, self, "Object", nil
-      object.allowed_in_generics = false
+      object.can_be_stored = false
       object.abstract = true
 
       types["Reference"] = reference = @reference = NonGenericClassType.new self, self, "Reference", object
-      reference.allowed_in_generics = false
+      reference.can_be_stored = false
 
       types["Value"] = value = @value = NonGenericClassType.new self, self, "Value", object
       abstract_value_type(value)
@@ -162,18 +176,18 @@ module Crystal
       types["Symbol"] = @symbol = SymbolType.new self, self, "Symbol", value, 4
       types["Pointer"] = pointer = @pointer = PointerType.new self, self, "Pointer", value, ["T"]
       pointer.struct = true
-      pointer.allowed_in_generics = false
+      pointer.can_be_stored = false
 
       types["Tuple"] = tuple = @tuple = TupleType.new self, self, "Tuple", value, ["T"]
-      tuple.allowed_in_generics = false
+      tuple.can_be_stored = false
 
       types["NamedTuple"] = named_tuple = @named_tuple = NamedTupleType.new self, self, "NamedTuple", value, ["T"]
-      named_tuple.allowed_in_generics = false
+      named_tuple.can_be_stored = false
 
       types["StaticArray"] = static_array = @static_array = StaticArrayType.new self, self, "StaticArray", value, ["T", "N"]
       static_array.struct = true
       static_array.declare_instance_var("@buffer", static_array.type_parameter("T"))
-      static_array.allowed_in_generics = false
+      static_array.can_be_stored = false
 
       types["String"] = string = @string = NonGenericClassType.new self, self, "String", reference
       string.declare_instance_var("@bytesize", int32)
@@ -181,7 +195,7 @@ module Crystal
       string.declare_instance_var("@c", uint8)
 
       types["Class"] = klass = @class = MetaclassType.new(self, object, value, "Class")
-      klass.allowed_in_generics = false
+      klass.can_be_stored = false
 
       types["Struct"] = struct_t = @struct_t = NonGenericClassType.new self, self, "Struct", value
       abstract_value_type(struct_t)
@@ -204,12 +218,27 @@ module Crystal
       types["ARGC_UNSAFE"] = @argc = argc_unsafe = Const.new self, self, "ARGC_UNSAFE", Primitive.new("argc", int32)
       types["ARGV_UNSAFE"] = @argv = argv_unsafe = Const.new self, self, "ARGV_UNSAFE", Primitive.new("argv", pointer_of(pointer_of(uint8)))
 
-      # Make sure to initialize ARGC and ARGV as soon as the program starts
+      # Make sure to initialize `ARGC_UNSAFE` and `ARGV_UNSAFE` as soon as the program starts
       class_var_and_const_initializers << argc_unsafe
       class_var_and_const_initializers << argv_unsafe
 
       types["GC"] = gc = NonGenericModuleType.new self, self, "GC"
       gc.metaclass.as(ModuleType).add_def Def.new("add_finalizer", [Arg.new("object")], Nop.new)
+
+      # Built-in annotations
+      types["AlwaysInline"] = @always_inline_annotation = AnnotationType.new self, self, "AlwaysInline"
+      types["CallConvention"] = @call_convention_annotation = AnnotationType.new self, self, "CallConvention"
+      types["Extern"] = @extern_annotation = AnnotationType.new self, self, "Extern"
+      types["Flags"] = @flags_annotation = AnnotationType.new self, self, "Flags"
+      types["Link"] = @link_annotation = AnnotationType.new self, self, "Link"
+      types["Naked"] = @naked_annotation = AnnotationType.new self, self, "Naked"
+      types["NoInline"] = @no_inline_annotation = AnnotationType.new self, self, "NoInline"
+      types["Packed"] = @packed_annotation = AnnotationType.new self, self, "Packed"
+      types["Primitive"] = @primitive_annotation = AnnotationType.new self, self, "Primitive"
+      types["Raises"] = @raises_annotation = AnnotationType.new self, self, "Raises"
+      types["ReturnsTwice"] = @returns_twice_annotation = AnnotationType.new self, self, "ReturnsTwice"
+      types["ThreadLocal"] = @thread_local_annotation = AnnotationType.new self, self, "ThreadLocal"
+      types["Deprecated"] = @deprecated_annotation = AnnotationType.new self, self, "Deprecated"
 
       define_crystal_constants
     end
@@ -219,7 +248,7 @@ module Crystal
     getter(literal_expander) { LiteralExpander.new self }
 
     # Returns a `CrystalPath` for this program.
-    getter(crystal_path) { CrystalPath.new(target_triple: target_machine.triple) }
+    getter(crystal_path) { CrystalPath.new(codegen_target: codegen_target) }
 
     # Returns a `Var` that has `Nil` as a type.
     # This variable is bound to other nodes in the semantic phase for things
@@ -229,10 +258,8 @@ module Crystal
 
     # Defines a predefined constant in the Crystal module, such as BUILD_DATE and VERSION.
     private def define_crystal_constants
-      version, sha = Crystal::Config.version_and_sha
-
-      if sha
-        define_crystal_string_constant "BUILD_COMMIT", sha
+      if build_commit = Crystal::Config.build_commit
+        define_crystal_string_constant "BUILD_COMMIT", build_commit
       else
         define_crystal_nil_constant "BUILD_COMMIT"
       end
@@ -242,7 +269,8 @@ module Crystal
       define_crystal_string_constant "DEFAULT_PATH", Crystal::Config.path
       define_crystal_string_constant "DESCRIPTION", Crystal::Config.description
       define_crystal_string_constant "PATH", Crystal::CrystalPath.default_path
-      define_crystal_string_constant "VERSION", version
+      define_crystal_string_constant "LIBRARY_PATH", Crystal::CrystalLibraryPath.default_path
+      define_crystal_string_constant "VERSION", Crystal::Config.version
       define_crystal_string_constant "LLVM_VERSION", Crystal::Config.llvm_version
     end
 
@@ -258,9 +286,7 @@ module Crystal
       crystal.types[name] = Const.new self, crystal, name, value
     end
 
-    setter target_machine : LLVM::TargetMachine?
-
-    getter(target_machine) { TargetMachine.create(Crystal::Config.default_target_triple) }
+    property(target_machine : LLVM::TargetMachine) { codegen_target.to_target_machine }
 
     # Returns the `Type` for `Array(type)`
     def array_of(type)
@@ -413,11 +439,11 @@ module Crystal
     end
 
     record RecordedRequire, filename : String, relative_to : String? do
-      JSON.mapping(filename: String, relative_to: String?)
+      include JSON::Serializable
     end
     property recorded_requires = [] of RecordedRequire
 
-    # Rmembers that the program depends on this require.
+    # Remembers that the program depends on this require.
     def record_require(filename, relative_to) : Nil
       recorded_requires << RecordedRequire.new(filename, relative_to)
     end
@@ -430,18 +456,22 @@ module Crystal
 
     {% for name in %w(object no_return value number reference void nil bool char int int8 int16 int32 int64 int128
                      uint8 uint16 uint32 uint64 uint128 float float32 float64 string symbol pointer array static_array
-                     exception tuple named_tuple proc union enum range regex crystal) %}
+                     exception tuple named_tuple proc union enum range regex crystal
+                     packed_annotation thread_local_annotation no_inline_annotation
+                     always_inline_annotation naked_annotation returns_twice_annotation
+                     raises_annotation primitive_annotation call_convention_annotation
+                     flags_annotation link_annotation extern_annotation deprecated_annotation) %}
       def {{name.id}}
         @{{name.id}}.not_nil!
       end
     {% end %}
 
-    # Returns the `Nil` `Type`
+    # Returns the `Nil` type
     def nil_type
       @nil.not_nil!
     end
 
-    # Returns the `Hash` `Type`
+    # Returns the `Hash` type
     def hash_type
       @hash_type.not_nil!
     end
@@ -480,12 +510,12 @@ module Crystal
       end
     end
 
-    # Retutns the `Struct` type
+    # Returns the `Struct` type
     def struct
       @struct_t.not_nil!
     end
 
-    # Retutns the `Class` type
+    # Returns the `Class` type
     def class_type
       @class.not_nil!
     end
@@ -510,7 +540,7 @@ module Crystal
     private def abstract_value_type(type)
       type.abstract = true
       type.struct = true
-      type.allowed_in_generics = false
+      type.can_be_stored = false
     end
 
     # Next come overrides for the type system
@@ -554,16 +584,13 @@ module Crystal
     def check_private(node)
       return nil unless node.visibility.private?
 
-      location = node.location
-      return nil unless location
-
-      filename = location.filename
-      return nil unless filename.is_a?(String)
+      filename = node.location.try &.original_filename
+      return nil unless filename
 
       file_module(filename)
     end
 
-    def to_s(io)
+    def to_s(io : IO) : Nil
       io << "<Program>"
     end
   end

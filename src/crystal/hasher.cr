@@ -1,5 +1,3 @@
-require "random/secure"
-
 # :nodoc:
 struct Crystal::Hasher
   # Implementation of a Hasher to compute a fast and safe hash
@@ -82,7 +80,7 @@ struct Crystal::Hasher
   private HASH_INF_MINUS = (-314159_i64).unsafe_as(UInt64)
 
   @@seed = uninitialized UInt64[2]
-  Random::Secure.random_bytes(Slice.new(pointerof(@@seed).as(UInt8*), sizeof(typeof(@@seed))))
+  Crystal::System::Random.random_bytes(Slice.new(pointerof(@@seed).as(UInt8*), sizeof(typeof(@@seed))))
 
   def initialize(@a : UInt64 = @@seed[0], @b : UInt64 = @@seed[1])
   end
@@ -95,8 +93,8 @@ struct Crystal::Hasher
   end
 
   private def permute(v : UInt64)
-    @a = rotl32(@a ^ v) * C1
-    @b = (rotl32(@b) ^ v) * C2
+    @a = rotl32(@a ^ v) &* C1
+    @b = (rotl32(@b) ^ v) &* C2
     self
   end
 
@@ -104,16 +102,16 @@ struct Crystal::Hasher
     a, b = @a, @b
     a ^= (a >> 23) ^ (a >> 40)
     b ^= (b >> 23) ^ (b >> 40)
-    a *= C1
-    b *= C2
+    a &*= C1
+    b &*= C2
     a ^= a >> 32
     b ^= b >> 32
-    a + b
+    a &+ b
   end
 
   def nil
-    @a += @b
-    @b += 1
+    @a &+= @b
+    @b &+= 1
     self
   end
 
@@ -246,7 +244,7 @@ struct Crystal::Hasher
   end
 
   private def read_u24(ptr, rest)
-    ptr[0].to_u64 | (ptr[rest/2].to_u64 << 8) | (ptr[rest - 1].to_u64 << 16)
+    ptr[0].to_u64 | (ptr[rest // 2].to_u64 << 8) | (ptr[rest - 1].to_u64 << 16)
   end
 
   private def read_u32(ptr)
@@ -291,8 +289,7 @@ struct Crystal::Hasher
     value.crystal_type_id.hash(self)
   end
 
-  def inspect(io)
+  def inspect(io : IO) : Nil
     io << "#{self.class}(hidden_state)"
-    nil
   end
 end

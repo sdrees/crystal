@@ -87,6 +87,14 @@ module LLVM::ValueMethods
     LibLLVM.set_alignment(self, bytes)
   end
 
+  def const_int_get_sext_value
+    LibLLVM.const_int_get_sext_value(self)
+  end
+
+  def const_int_get_zext_value
+    LibLLVM.const_int_get_zext_value(self)
+  end
+
   def to_value
     LLVM::Value.new unwrap
   end
@@ -95,7 +103,7 @@ module LLVM::ValueMethods
     LibLLVM.dump_value self
   end
 
-  def inspect(io)
+  def inspect(io : IO) : Nil
     LLVM.to_io(LibLLVM.print_value_to_string(self), io)
     self
   end

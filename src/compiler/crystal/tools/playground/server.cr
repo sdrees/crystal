@@ -1,8 +1,8 @@
 require "http/server"
-require "tempfile"
 require "logger"
 require "ecr/macros"
 require "markdown"
+require "compiler/crystal/tools/formatter"
 
 module Crystal::Playground
   class Session
@@ -89,6 +89,25 @@ module Crystal::Playground
         json.field "type", "run"
         json.field "tag", tag
         json.field "filename", output_filename
+      end
+    end
+
+    def format(source, tag)
+      @logger.info "Request to format code (session=#{@session_key}, tag=#{tag}).\n#{source}"
+
+      @tag = tag
+
+      begin
+        value = Crystal.format source
+      rescue ex : Crystal::Exception
+        send_exception ex, tag
+        return
+      end
+
+      send_with_json_builder do |json|
+        json.field "type", "format"
+        json.field "tag", tag
+        json.field "value", value
       end
     end
 
@@ -236,7 +255,7 @@ module Crystal::Playground
       end
     end
 
-    def to_s(io)
+    def to_s(io : IO) : Nil
       body = content
       # avoid the layout if the file is a full html
       if File.extname(@filename).starts_with?(".htm") && content.starts_with?("<!")
@@ -290,7 +309,7 @@ module Crystal::Playground
       Dir["playground/*.{md,html,cr}"]
     end
 
-    def to_s(io)
+    def to_s(io : IO) : Nil
       render_with_layout(io) do
         ECR.embed "#{__DIR__}/views/_workbook.html.ecr", io
         nil
@@ -485,6 +504,10 @@ module Crystal::Playground
               session.run source, tag
             when "stop"
               session.stop
+            when "format"
+              source = json["source"].as_s
+              tag = json["tag"].as_i
+              session.format source, tag
             end
           end
         end
@@ -503,17 +526,14 @@ module Crystal::Playground
         HTTP::StaticFileHandler.new(public_dir),
       ]
 
-      host = @host
-      if host
-        server = HTTP::Server.new host, @port, handlers
-      else
-        server = HTTP::Server.new @port, handlers
-        host = "localhost"
-      end
+      server = HTTP::Server.new handlers
 
-      puts "Listening on http://#{host}:#{@port}"
-      if host == "0.0.0.0"
-        puts "WARNING running playground with 0.0.0.0 is unsecure."
+      address = server.bind_tcp @host || Socket::IPAddress::LOOPBACK, @port
+      @port = address.port
+
+      puts "Listening on http://#{address}"
+      if address.unspecified?
+        puts "WARNING running playground on #{address.address} is insecure."
       end
 
       begin

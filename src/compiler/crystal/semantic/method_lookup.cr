@@ -2,8 +2,10 @@ require "../types"
 
 module Crystal
   record NamedArgumentType, name : String, type : Type do
-    def self.from_args(named_args : Array(NamedArgument)?)
-      named_args.try &.map { |named_arg| new(named_arg.name, named_arg.value.type) }
+    def self.from_args(named_args : Array(NamedArgument)?, with_literals = false)
+      named_args.try &.map do |named_arg|
+        new(named_arg.name, named_arg.value.type(with_literals: with_literals))
+      end
     end
   end
 
@@ -34,7 +36,7 @@ module Crystal
       # `new` must only be searched in ancestors if this type itself doesn't define
       # an `initialize` or `self.new` method. This was already computed in `new.cr`
       # and can be known by invoking `lookup_new_in_ancestors?`
-      if my_parents && !(!lookup_new_in_ancestors? && is_new)
+      if my_parents && !(is_new && !lookup_new_in_ancestors?)
         my_parents.each do |parent|
           matches = parent.lookup_matches(signature, owner, parent, matches_array)
           if matches.cover_all?
@@ -42,6 +44,11 @@ module Crystal
           else
             matches_array = matches.matches
           end
+
+          # If this is a `new` method, once a parent defines an `initialize`
+          # method and we couldn't find any matches we must not go up in the
+          # hierarchy.
+          break if is_new && parent.has_def_without_parents?(signature.name)
         end
       end
 
@@ -78,7 +85,7 @@ module Crystal
                match_named_args.size == signature_named_args.size
               match_named_args = match_named_args.sort_by &.name
               signature_named_args = signature_named_args.sort_by &.name
-              named_arg_types_equal = match_named_args.equals?(signature_named_args) do |x, y|
+              named_arg_types_equal = signature_named_args.equals?(match_named_args) do |x, y|
                 x.name == y.name && x.type.compatible_with?(y.type)
               end
             else
@@ -294,7 +301,7 @@ module Crystal
         end
       end
 
-      # If there's a restriction on a double splat, zero matching named arguments don't matc
+      # If there's a restriction on a double splat, zero matching named arguments don't match
       if double_splat && double_splat_restriction &&
          !double_splat_restriction.is_a?(DoubleSplat) && !found_unmatched_named_arg
         return nil
@@ -349,7 +356,7 @@ module Crystal
         # Check matches but without parents: only included modules
         subtype_matches = subtype_lookup.lookup_matches_with_modules(signature, subtype_virtual_lookup, subtype_virtual_lookup)
 
-        # For Foo+:Class#new we need to check that this subtype doesn't define
+        # For Foo+.class#new we need to check that this subtype doesn't define
         # an incompatible initialize: if so, we return empty matches, because
         # all subtypes must have an initialize with the same number of arguments.
         if is_new && subtype_matches.empty?

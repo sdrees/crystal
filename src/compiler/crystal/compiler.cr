@@ -12,6 +12,11 @@ module Crystal
     Default     = LineNumbers
   end
 
+  enum Warnings
+    All
+    None
+  end
+
   # Main interface to the compiler.
   #
   # A Compiler parses source code, type checks it and
@@ -20,7 +25,7 @@ module Crystal
     CC = ENV["CC"]? || "cc"
     CL = "cl"
 
-    # A source to the compiler: it's filename and source code.
+    # A source to the compiler: its filename and source code.
     record Source,
       filename : String,
       code : String
@@ -83,12 +88,12 @@ module Crystal
     # one LLVM module is created for each type in a program.
     property? single_module = false
 
-    # Set to a `ProgressTracker` object which tracks compilation progress.
+    # A `ProgressTracker` object which tracks compilation progress.
     property progress_tracker = ProgressTracker.new
 
-    # Target triple to use in the compilation.
+    # Codegen target to use in the compilation.
     # If not set, asks LLVM the default one for the current machine.
-    property target_triple : String?
+    property codegen_target = Config.default_target
 
     # If `true`, prints the link command line that is performed
     # to create the executable.
@@ -98,13 +103,30 @@ module Crystal
     # and can later be used to generate API docs.
     property? wants_doc = false
 
-    # Can be set to an array of strings to emit other files other
+    # Which kind of warnings wants to be detected.
+    property warnings : Warnings = Warnings::None
+
+    # Paths to ignore for warnings detection.
+    property warnings_exclude : Array(String) = [] of String
+
+    # If `true` compiler will error if warnings are found.
+    property error_on_warnings : Bool = false
+
+    @[Flags]
+    enum EmitTarget
+      ASM
+      OBJ
+      LLVM_BC
+      LLVM_IR
+    end
+
+    # Can be set to a set of flags to emit other files other
     # than the executable file:
     # * asm: assembly files
     # * llvm-bc: LLVM bitcode
     # * llvm-ir: LLVM IR
     # * obj: object file
-    property emit : Array(String)?
+    property emit : EmitTarget?
 
     # Base filename to use for `emit` output.
     property emit_base_filename : String?
@@ -177,6 +199,7 @@ module Crystal
       program = Program.new
       program.filename = sources.first.filename
       program.cache_dir = CacheDir.instance.directory_for(sources)
+      program.codegen_target = codegen_target
       program.target_machine = target_machine
       program.flags << "release" if release?
       program.flags << "debug" unless debug.none?
@@ -187,6 +210,9 @@ module Crystal
       program.stdout = stdout
       program.show_error_trace = show_error_trace?
       program.progress_tracker = @progress_tracker
+      program.warnings = @warnings
+      program.warnings_exclude = @warnings_exclude.map { |p| File.expand_path p }
+      program.error_on_warnings = @error_on_warnings
       program
     end
 
@@ -223,7 +249,7 @@ module Crystal
 
     private def bc_flags_changed?(output_dir)
       bc_flags_changed = true
-      current_bc_flags = "#{@target_triple}|#{@mcpu}|#{@mattr}|#{@release}|#{@link_flags}"
+      current_bc_flags = "#{@codegen_target}|#{@mcpu}|#{@mattr}|#{@release}|#{@link_flags}"
       bc_flags_filename = "#{output_dir}/bc_flags"
       if File.file?(bc_flags_filename)
         previous_bc_flags = File.read(bc_flags_filename).strip
@@ -368,9 +394,9 @@ module Crystal
               input: Process::Redirect::Close, output: Process::Redirect::Inherit, error: Process::Redirect::Pipe) do |process|
               process.error.each_line(chomp: false) do |line|
                 hint_string = colorize("(this usually means you need to install the development package for lib\\1)").yellow.bold
-                line = line.gsub(/cannot find -l(\w+)/, "cannot find -l\\1 #{hint_string}")
-                line = line.gsub(/unable to find library -l(\w+)/, "unable to find library -l\\1 #{hint_string}")
-                line = line.gsub(/library not found for -l(\w+)/, "library not found for -l\\1 #{hint_string}")
+                line = line.gsub(/cannot find -l(\S+)\b/, "cannot find -l\\1 #{hint_string}")
+                line = line.gsub(/unable to find library -l(\S+)\b/, "unable to find library -l\\1 #{hint_string}")
+                line = line.gsub(/library not found for -l(\S+)\b/, "library not found for -l\\1 #{hint_string}")
                 STDERR << line
               end
             end
@@ -383,18 +409,32 @@ module Crystal
     end
 
     private def codegen_many_units(program, units, target_triple)
-      jobs_count = 0
       all_reused = [] of String
+
+      wants_stats_or_progress = @progress_tracker.stats? || @progress_tracker.progress?
+
+      # If threads is 1 and no stats/progress is needed we can avoid
+      # fork/spawn/channels altogether. This is particularly useful for
+      # CI because there forking eventually leads to "out of memory" errors.
+      if @n_threads == 1
+        units.each do |unit|
+          unit.compile
+          all_reused << unit.name if wants_stats_or_progress && unit.reused_previous_compilation?
+        end
+        return all_reused
+      end
+
+      jobs_count = 0
       wait_channel = Channel(Array(String)).new(@n_threads)
 
-      units.each_slice(Math.max(units.size / @n_threads, 1)) do |slice|
+      units.each_slice(Math.max(units.size // @n_threads, 1)) do |slice|
         jobs_count += 1
         spawn do
           # For stats output we want to count how many previous
           # .o files were reused, mainly to detect performance regressions.
           # Because we fork, we must communicate using a pipe.
           reused = [] of String
-          if @progress_tracker.stats? || @progress_tracker.progress?
+          if wants_stats_or_progress
             pr, pw = IO.pipe
             spawn do
               pr.each_line do |line|
@@ -476,11 +516,8 @@ module Crystal
       end
     end
 
-    protected def target_machine
-      @target_machine ||= begin
-        triple = @target_triple || Crystal::Config.default_target_triple
-        TargetMachine.create(triple, @mcpu || "", @mattr || "", @release)
-      end
+    getter(target_machine : LLVM::TargetMachine) do
+      @codegen_target.to_target_machine(@mcpu || "", @mattr || "", @release)
     rescue ex : ArgumentError
       stderr.print colorize("Error: ").red.bold
       stderr.print "llc: "
@@ -617,7 +654,7 @@ module Crystal
         # old one. Generating an `.o` file is what takes most time.
         #
         # However, instead of directly generating the final `.o` file
-        # from the `.bc` file, we generate it to a termporary name (`.o.tmp`)
+        # from the `.bc` file, we generate it to a temporary name (`.o.tmp`)
         # and then we rename that file to `.o`. We do this because the compiler
         # could be interrupted while the `.o` file is being generated, leading
         # to a corrupted file that later would cause compilation issues.
@@ -667,21 +704,17 @@ module Crystal
         llvm_mod.print_to_file ll_name if compiler.dump_ll?
       end
 
-      def emit(values : Array, output_filename)
-        values.each do |value|
-          emit value, output_filename
-        end
-      end
-
-      def emit(value : String, output_filename)
-        case value
-        when "asm"
+      def emit(emit_target : EmitTarget, output_filename)
+        if emit_target.asm?
           compiler.target_machine.emit_asm_to_file llvm_mod, "#{output_filename}.s"
-        when "llvm-bc"
+        end
+        if emit_target.llvm_bc?
           FileUtils.cp(bc_name, "#{output_filename}.bc")
-        when "llvm-ir"
+        end
+        if emit_target.llvm_ir?
           llvm_mod.print_to_file "#{output_filename}.ll"
-        when "obj"
+        end
+        if emit_target.obj?
           FileUtils.cp(object_name, "#{output_filename}.o")
         end
       end

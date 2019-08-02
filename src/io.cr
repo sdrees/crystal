@@ -7,13 +7,13 @@ require "c/errno"
 # The `IO` class is the basis for all input and output in Crystal.
 #
 # This class is inherited by types like `File`, `Socket` and `IO::Memory` and
-# provide many useful methods for reading to and writing from an IO, like `print`, `puts`,
+# provides many useful methods for reading from and writing to an IO, like `print`, `puts`,
 # `gets` and `printf`.
 #
 # The only requirement for a type including the `IO` module is to define
 # these two methods:
 #
-# * `read(slice : Bytes)`: read at most *slice.size* bytes into *slice* and return the number of bytes read
+# * `read(slice : Bytes)`: read at most *slice.size* bytes from IO into *slice* and return the number of bytes read
 # * `write(slice : Bytes)`: write the whole *slice* into the IO
 #
 # For example, this is a simple `IO` on top of a `Bytes`:
@@ -29,7 +29,7 @@ require "c/errno"
 #     slice.size
 #   end
 #
-#   def write(slice : Bytes)
+#   def write(slice : Bytes) : Nil
 #     slice.size.times { |i| @slice[i] = slice[i] }
 #     @slice += slice.size
 #     nil
@@ -134,54 +134,41 @@ abstract class IO
   def flush
   end
 
-  {% unless flag?(:win32) %}
-    # Creates a pair of pipe endpoints (connected to each other)
-    # and returns them as a two-element `Tuple`.
-    #
-    # ```
-    # reader, writer = IO.pipe
-    # writer.puts "hello"
-    # writer.puts "world"
-    # reader.gets # => "hello"
-    # reader.gets # => "world"
-    # ```
-    def self.pipe(read_blocking = false, write_blocking = false)
-      pipe_fds = uninitialized StaticArray(LibC::Int, 2)
-      if LibC.pipe(pipe_fds) != 0
-        raise Errno.new("Could not create pipe")
-      end
+  # Creates a pair of pipe endpoints (connected to each other)
+  # and returns them as a two-element `Tuple`.
+  #
+  # ```
+  # reader, writer = IO.pipe
+  # writer.puts "hello"
+  # writer.puts "world"
+  # reader.gets # => "hello"
+  # reader.gets # => "world"
+  # ```
+  def self.pipe(read_blocking = false, write_blocking = false) : {IO::FileDescriptor, IO::FileDescriptor}
+    Crystal::System::FileDescriptor.pipe(read_blocking, write_blocking)
+  end
 
-      r = IO::FileDescriptor.new(pipe_fds[0], read_blocking)
-      w = IO::FileDescriptor.new(pipe_fds[1], write_blocking)
-      r.close_on_exec = true
-      w.close_on_exec = true
-      w.sync = true
-
-      {r, w}
+  # Creates a pair of pipe endpoints (connected to each other) and passes them
+  # to the given block. Both endpoints are closed after the block.
+  #
+  # ```
+  # IO.pipe do |reader, writer|
+  #   writer.puts "hello"
+  #   writer.puts "world"
+  #   reader.gets # => "hello"
+  #   reader.gets # => "world"
+  # end
+  # ```
+  def self.pipe(read_blocking = false, write_blocking = false)
+    r, w = IO.pipe(read_blocking, write_blocking)
+    begin
+      yield r, w
+    ensure
+      w.flush
+      r.close
+      w.close
     end
-
-    # Creates a pair of pipe endpoints (connected to each other) and passes them
-    # to the given block. Both endpoints are closed after the block.
-    #
-    # ```
-    # IO.pipe do |reader, writer|
-    #   writer.puts "hello"
-    #   writer.puts "world"
-    #   reader.gets # => "hello"
-    #   reader.gets # => "world"
-    # end
-    # ```
-    def self.pipe(read_blocking = false, write_blocking = false)
-      r, w = IO.pipe(read_blocking, write_blocking)
-      begin
-        yield r, w
-      ensure
-        w.flush
-        r.close
-        w.close
-      end
-    end
-  {% end %}
+  end
 
   # Writes the given object into this `IO`.
   # This ends up calling `to_s(io)` on the object.
@@ -281,6 +268,8 @@ abstract class IO
     nil
   end
 
+  # Writes a formatted string to this IO.
+  # For details on the format string, see `Kernel::sprintf`.
   def printf(format_string, *args) : Nil
     printf format_string, args
   end
@@ -632,7 +621,7 @@ abstract class IO
     ascii = delimiter.ascii?
     decoder = decoder()
 
-    # # If the char's representation is a single byte and we have an encoding,
+    # If the char's representation is a single byte and we have an encoding,
     # search the delimiter in the buffer
     if ascii && decoder
       return decoder.gets(self, delimiter.ord.to_u8, limit: limit, chomp: chomp)
@@ -919,17 +908,13 @@ abstract class IO
   # ```
   # io = IO::Memory.new("hello\nworld")
   # io.each_line do |line|
-  #   puts line.chomp.reverse
+  #   puts line
   # end
+  # # output:
+  # # hello
+  # # world
   # ```
-  #
-  # Output:
-  #
-  # ```text
-  # olleh
-  # dlrow
-  # ```
-  def each_line(*args, **options) : Nil
+  def each_line(*args, **options, &block : String ->) : Nil
     while line = gets(*args, **options)
       yield line
     end
@@ -1034,7 +1019,10 @@ abstract class IO
   # String operations (`gets`, `gets_to_end`, `read_char`, `<<`, `print`, `puts`
   # `printf`) will use this encoding.
   def set_encoding(encoding : String, invalid : Symbol? = nil)
-    if (encoding == "UTF-8") && (invalid != :skip)
+    if invalid != :skip && (
+         encoding.compare("UTF-8", case_insensitive: true) == 0 ||
+         encoding.compare("UTF8", case_insensitive: true) == 0
+       )
       @encoding = nil
     else
       @encoding = EncodingOptions.new(encoding, invalid)
@@ -1049,6 +1037,11 @@ abstract class IO
   # Returns this `IO`'s encoding. The default is `UTF-8`.
   def encoding : String
     @encoding.try(&.name) || "UTF-8"
+  end
+
+  # :nodoc:
+  def has_non_utf8_encoding?
+    !!@encoding
   end
 
   # Seeks to a given *offset* (in bytes) according to the *whence* argument.
@@ -1130,14 +1123,14 @@ abstract class IO
   #
   # io2.to_s # => "hello"
   # ```
-  def self.copy(src, dst)
+  def self.copy(src, dst) : UInt64
     buffer = uninitialized UInt8[4096]
-    count = 0
+    count = 0_u64
     while (len = src.read(buffer.to_slice).to_i32) > 0
       dst.write buffer.to_slice[0, len]
       count += len
     end
-    len < 0 ? len : count
+    count
   end
 
   # Copy at most *limit* bytes from *src* to *dst*.
@@ -1150,8 +1143,10 @@ abstract class IO
   #
   # io2.to_s # => "hel"
   # ```
-  def self.copy(src, dst, limit : Int)
+  def self.copy(src, dst, limit : Int) : UInt64
     raise ArgumentError.new("Negative limit") if limit < 0
+
+    limit = limit.to_u64
 
     buffer = uninitialized UInt8[4096]
     remaining = limit
@@ -1171,11 +1166,6 @@ abstract class IO
     def next
       @io.gets(*@args, **@nargs) || stop
     end
-
-    def rewind
-      @io.rewind
-      self
-    end
   end
 
   private struct CharIterator(I)
@@ -1187,11 +1177,6 @@ abstract class IO
     def next
       @io.read_char || stop
     end
-
-    def rewind
-      @io.rewind
-      self
-    end
   end
 
   private struct ByteIterator(I)
@@ -1202,11 +1187,6 @@ abstract class IO
 
     def next
       @io.read_byte || stop
-    end
-
-    def rewind
-      @io.rewind
-      self
     end
   end
 end

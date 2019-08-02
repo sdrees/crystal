@@ -31,10 +31,10 @@ struct XML::NodeSet
   # See `Object#hash(hasher)`
   def_hash object_id
 
-  def inspect(io)
-    io << "["
+  def inspect(io : IO) : Nil
+    io << '['
     join ", ", io, &.inspect(io)
-    io << "]"
+    io << ']'
   end
 
   def size
@@ -45,8 +45,8 @@ struct XML::NodeSet
     @set.address
   end
 
-  def to_s(io)
-    join "\n", io
+  def to_s(io : IO) : Nil
+    join '\n', io
   end
 
   def to_unsafe

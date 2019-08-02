@@ -1,8 +1,37 @@
 require "crystal/hasher"
 
-# A `Hash` represents a mapping of keys to values.
+# A `Hash` represents a collection of key-value mappings, similar to a dictionary.
 #
-# See the [official docs](http://crystal-lang.org/docs/syntax_and_semantics/literals/hash.html) for the basics.
+# Main operations are storing a key-value mapping (`#[]=`) and
+# querying the value associated to a key (`#[]`). Key-value mappings can also be
+# deleted (`#delete`).
+# Keys are unique within a hash. When adding a key-value mapping with a key that
+# is already in use, the old value will be forgotten.
+#
+# ```
+# # Create a new Hash for mapping String to Int32
+# hash = Hash(String, Int32).new
+# hash["one"] = 1
+# hash["two"] = 2
+# hash["one"] # => 1
+# ```
+#
+# [Hash literals](http://crystal-lang.org/reference/syntax_and_semantics/literals/hash.html)
+# can also be used to create a `Hash`:
+#
+# ```
+# {"one" => 1, "two" => 2}
+# ```
+#
+# Implementation is based on an open hash table.
+# Two objects refer to the same hash key when their hash value (`Object#hash`)
+# is identical and both objects are equal to each other (`Object#==`).
+#
+# Enumeration follows the order that the corresponding keys were inserted.
+#
+# NOTE: When using mutable data types as keys, changing the value of a key after
+# it was inserted into the `Hash` may lead to undefined behaviour. This can be
+# restored by re-indexing the hash with `#rehash`.
 class Hash(K, V)
   include Enumerable({K, V})
   include Iterable({K, V})
@@ -13,6 +42,24 @@ class Hash(K, V)
   @last : Entry(K, V)?
   @block : (self, K -> V)?
 
+  # Creates a new empty `Hash` with a *block* for handling missing keys.
+  #
+  # ```
+  # proc = ->(hash : Hash(String, Int32), key : String) { hash[key] = key.size }
+  # hash = Hash(String, Int32).new(proc)
+  #
+  # hash.size   # => 0
+  # hash["foo"] # => 3
+  # hash.size   # => 1
+  # hash["bar"] = 10
+  # hash["bar"] # => 10
+  # ```
+  #
+  # The *initial_capacity* is useful to avoid unnecessary reallocations
+  # of the internal buffer in case of growth. If the number of elements
+  # a hash will hold is known, the hash should be initialized with that
+  # capacity for improved performance. Otherwise, the default is 11 and inputs
+  # less than 11 are ignored.
   def initialize(block : (Hash(K, V), K -> V)? = nil, initial_capacity = nil)
     initial_capacity ||= 11
     initial_capacity = 11 if initial_capacity < 11
@@ -23,10 +70,50 @@ class Hash(K, V)
     @block = block
   end
 
+  # Creates a new empty `Hash` with a *block* that handles missing keys.
+  #
+  # ```
+  # hash = Hash(String, Int32).new do |hash, key|
+  #   hash[key] = key.size
+  # end
+  #
+  # hash.size   # => 0
+  # hash["foo"] # => 3
+  # hash.size   # => 1
+  # hash["bar"] = 10
+  # hash["bar"] # => 10
+  # ```
+  #
+  # The *initial_capacity* is useful to avoid unnecessary reallocations
+  # of the internal buffer in case of growth. If the number of elements
+  # a hash will hold is known, the hash should be initialized with that
+  # capacity for improved performance. Otherwise, the default is 11 and inputs
+  # less than 11 are ignored.
   def self.new(initial_capacity = nil, &block : (Hash(K, V), K -> V))
     new block, initial_capacity: initial_capacity
   end
 
+  # Creates a new empty `Hash` where the *default_value* is returned if a key is missing.
+  #
+  # ```
+  # inventory = Hash(String, Int32).new(0)
+  # inventory["socks"] = 3
+  # inventory["pickles"] # => 0
+  # ```
+  #
+  # NOTE: The default value is passed by reference:
+  # ```
+  # arr = [1, 2, 3]
+  # hash = Hash(String, Array(Int32)).new(arr)
+  # hash["3"][1] = 4
+  # arr # => [1, 4, 3]
+  # ```
+  #
+  # The *initial_capacity* is useful to avoid unnecessary reallocations
+  # of the internal buffer in case of growth. If the number of elements
+  # a hash will hold is known, the hash should be initialized with that
+  # capacity for improved performance. Otherwise, the default is 11 and inputs
+  # less than 11 are ignored.
   def self.new(default_value : V, initial_capacity = nil)
     new(initial_capacity: initial_capacity) { default_value }
   end
@@ -57,9 +144,30 @@ class Hash(K, V)
     value
   end
 
-  # See also: `Hash#fetch`.
+  # Returns the value for the key given by *key*.
+  # If not found, returns the default value given by `Hash.new`, otherwise raises `KeyError`.
+  #
+  # ```
+  # h = {"foo" => "bar"}
+  # h["foo"] # => "bar"
+  #
+  # h = Hash(String, String).new("bar")
+  # h["foo"] # => "bar"
+  #
+  # h = Hash(String, String).new { "bar" }
+  # h["foo"] # => "bar"
+  #
+  # h = Hash(String, String).new
+  # h["foo"] # raises KeyError
+  # ```
   def [](key)
-    fetch(key)
+    fetch(key) do
+      if (block = @block) && key.is_a?(K)
+        block.call(self, key.as(K))
+      else
+        raise KeyError.new "Missing hash key: #{key.inspect}"
+      end
+    end
   end
 
   # Returns the value for the key given by *key*.
@@ -75,6 +183,45 @@ class Hash(K, V)
   # ```
   def []?(key)
     fetch(key, nil)
+  end
+
+  # Traverses the depth of a structure and returns the value.
+  # Returns `nil` if not found.
+  #
+  # ```
+  # h = {"a" => {"b" => [10, 20, 30]}}
+  # h.dig? "a", "b"                # => [10, 20, 30]
+  # h.dig? "a", "b", "c", "d", "e" # => nil
+  # ```
+  def dig?(key : K, *subkeys)
+    if (value = self[key]?) && value.responds_to?(:dig?)
+      value.dig?(*subkeys)
+    end
+  end
+
+  # :nodoc:
+  def dig?(key : K)
+    self[key]?
+  end
+
+  # Traverses the depth of a structure and returns the value, otherwise
+  # raises `KeyError`.
+  #
+  # ```
+  # h = {"a" => {"b" => [10, 20, 30]}}
+  # h.dig "a", "b"                # => [10, 20, 30]
+  # h.dig "a", "b", "c", "d", "e" # raises KeyError
+  # ```
+  def dig(key : K, *subkeys)
+    if (value = self[key]) && value.responds_to?(:dig)
+      return value.dig(*subkeys)
+    end
+    raise KeyError.new "Hash value not diggable for key: #{key.inspect}"
+  end
+
+  # :nodoc:
+  def dig(key : K)
+    self[key]
   end
 
   # Returns `true` when key given by *key* exists, otherwise `false`.
@@ -102,32 +249,6 @@ class Hash(K, V)
     false
   end
 
-  # Returns the value for the key given by *key*.
-  # If not found, returns the default value given by `Hash.new`, otherwise raises `KeyError`.
-  #
-  # ```
-  # h = {"foo" => "bar"}
-  # h["foo"] # => "bar"
-  #
-  # h = Hash(String, String).new("bar")
-  # h["foo"] # => "bar"
-  #
-  # h = Hash(String, String).new { "bar" }
-  # h["foo"] # => "bar"
-  #
-  # h = Hash(String, String).new
-  # h["foo"] # raises KeyError
-  # ```
-  def fetch(key)
-    fetch(key) do
-      if (block = @block) && key.is_a?(K)
-        block.call(self, key.as(K))
-      else
-        raise KeyError.new "Missing hash key: #{key.inspect}"
-      end
-    end
-  end
-
   # Returns the value for the key given by *key*, or when not found the value given by *default*.
   # This ignores the default value set by `Hash.new`.
   #
@@ -144,7 +265,8 @@ class Hash(K, V)
   #
   # ```
   # h = {"foo" => "bar"}
-  # h.fetch("foo") { |key| key.upcase } # => "bar"
+  # h.fetch("foo") { "default value" }  # => "bar"
+  # h.fetch("bar") { "default value" }  # => "default value"
   # h.fetch("bar") { |key| key.upcase } # => "BAR"
   # ```
   def fetch(key)
@@ -304,6 +426,8 @@ class Hash(K, V)
   #   key_and_value # => {"foo", "bar"}
   # end
   # ```
+  #
+  # The enumeration follows the order the keys were inserted.
   def each : Nil
     current = @first
     while current
@@ -322,6 +446,8 @@ class Hash(K, V)
   # iterator.next # => {"foo", "bar"}
   # iterator.next # => {"baz", "qux"}
   # ```
+  #
+  # The enumeration follows the order the keys were inserted.
   def each
     EntryIterator(K, V).new(self, @first)
   end
@@ -334,6 +460,8 @@ class Hash(K, V)
   #   key # => "foo"
   # end
   # ```
+  #
+  # The enumeration follows the order the keys were inserted.
   def each_key
     each do |key, value|
       yield key
@@ -353,6 +481,8 @@ class Hash(K, V)
   # key = iterator.next
   # key # => "baz"
   # ```
+  #
+  # The enumeration follows the order the keys were inserted.
   def each_key
     KeyIterator(K, V).new(self, @first)
   end
@@ -365,6 +495,8 @@ class Hash(K, V)
   #   value # => "bar"
   # end
   # ```
+  #
+  # The enumeration follows the order the keys were inserted.
   def each_value
     each do |key, value|
       yield value
@@ -384,6 +516,8 @@ class Hash(K, V)
   # value = iterator.next
   # value # => "qux"
   # ```
+  #
+  # The enumeration follows the order the keys were inserted.
   def each_value
     ValueIterator(K, V).new(self, @first)
   end
@@ -590,6 +724,48 @@ class Hash(K, V)
     reject! { |key, value| value.nil? }
   end
 
+  # Returns a new hash with all keys converted using the block operation.
+  # The block can change a type of keys.
+  #
+  # ```
+  # hash = {:a => 1, :b => 2, :c => 3}
+  # hash.transform_keys { |key| key.to_s } # => {"a" => 1, "b" => 2, "c" => 3}
+  # ```
+  def transform_keys(&block : K -> K2) forall K2
+    each_with_object({} of K2 => V) do |(key, value), memo|
+      memo[yield(key)] = value
+    end
+  end
+
+  # Returns a new hash with the results of running block once for every value.
+  # The block can change a type of values.
+  #
+  # ```
+  # hash = {:a => 1, :b => 2, :c => 3}
+  # hash.transform_values { |value| value + 1 } # => {:a => 2, :b => 3, :c => 4}
+  # ```
+  def transform_values(&block : V -> V2) forall V2
+    each_with_object({} of K => V2) do |(key, value), memo|
+      memo[key] = yield(value)
+    end
+  end
+
+  # Destructively transforms all values using a block. Same as transform_values but modifies in place.
+  # The block cannot change a type of values.
+  #
+  # ```
+  # hash = {:a => 1, :b => 2, :c => 3}
+  # hash.transform_values! { |value| value + 1 }
+  # hash # => {:a => 2, :b => 3, :c => 4}
+  # ```
+  def transform_values!(&block : V -> V)
+    current = @first
+    while current
+      current.value = yield(current.value)
+      current = current.fore
+    end
+  end
+
   # Zips two arrays into a `Hash`, taking keys from *ary1* and values from *ary2*.
   #
   # ```
@@ -612,8 +788,8 @@ class Hash(K, V)
   # Returns the first key if it exists, or returns `nil`.
   #
   # ```
-  # hash = {"foo" => "bar"}
-  # hash.first_key? # => "foo"
+  # hash = {"foo1" => "bar1", "foz2" => "baz2"}
+  # hash.first_key? # => "foo1"
   # hash.clear
   # hash.first_key? # => nil
   # ```
@@ -626,9 +802,50 @@ class Hash(K, V)
     @first.not_nil!.value
   end
 
-  # Similar to `#first_key?`, but returns its value.
+  # Returns the first value if it exists, or returns `nil`.
+  #
+  # ```
+  # hash = {"foo1" => "bar1", "foz2" => "baz2"}
+  # hash.first_value? # => "bar1"
+  # hash.clear
+  # hash.first_value? # => nil
+  # ```
   def first_value?
     @first.try &.value
+  end
+
+  # Returns the last key in the hash.
+  def last_key
+    @last.not_nil!.key
+  end
+
+  # Returns the last key if it exists, or returns `nil`.
+  #
+  # ```
+  # hash = {"foo1" => "bar1", "foz2" => "baz2"}
+  # hash.last_key? # => "foz2"
+  # hash.clear
+  # hash.last_key? # => nil
+  # ```
+  def last_key?
+    @last.try &.key
+  end
+
+  # Returns the last value in the hash.
+  def last_value
+    @last.not_nil!.value
+  end
+
+  # Returns the last value if it exists, or returns `nil`.
+  #
+  # ```
+  # hash = {"foo1" => "bar1", "foz2" => "baz2"}
+  # hash.last_value? # => "baz2"
+  # hash.clear
+  # hash.last_value? # => nil
+  # ```
+  def last_value?
+    @last.try &.value
   end
 
   # Deletes and returns the first key-value pair in the hash,
@@ -718,7 +935,7 @@ class Hash(K, V)
       copy = hasher
       copy = key.hash(copy)
       copy = value.hash(copy)
-      result += copy.result
+      result &+= copy.result
     end
 
     result.hash(hasher)
@@ -756,7 +973,7 @@ class Hash(K, V)
     hash
   end
 
-  def inspect(io : IO)
+  def inspect(io : IO) : Nil
     to_s(io)
   end
 
@@ -767,9 +984,9 @@ class Hash(K, V)
   # h.to_s       # => "{\"foo\" => \"bar\"}"
   # h.to_s.class # => String
   # ```
-  def to_s(io : IO)
+  def to_s(io : IO) : Nil
     executed = exec_recursive(:to_s) do
-      io << "{"
+      io << '{'
       found_one = false
       each do |key, value|
         io << ", " if found_one
@@ -778,7 +995,7 @@ class Hash(K, V)
         value.inspect(io)
         found_one = true
       end
-      io << "}"
+      io << '}'
     end
     io << "{...}" unless executed
   end
@@ -804,7 +1021,12 @@ class Hash(K, V)
     self
   end
 
-  def rehash
+  # Rebuilds the hash table based on the current value of each key.
+  #
+  # When using mutable data types as keys, changing the value of a key after
+  # it was inserted into the `Hash` may lead to undefined behaviour.
+  # This method re-indexes the hash using the current key values.
+  def rehash : Nil
     new_size = calculate_new_size(@size)
     @buckets = @buckets.realloc(new_size)
     new_size.times { |i| @buckets[i] = nil }
@@ -911,10 +1133,6 @@ class Hash(K, V)
       else
         stop
       end
-    end
-
-    def rewind
-      @current = @hash.@first
     end
   end
 
