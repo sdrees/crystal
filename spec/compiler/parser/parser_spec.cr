@@ -245,8 +245,11 @@ module Crystal
     it_parses "def foo; yield 1; yield; end", Def.new("foo", body: [Yield.new([1.int32] of ASTNode), Yield.new] of ASTNode, yields: 1)
     it_parses "def foo(a, b = a); end", Def.new("foo", [Arg.new("a"), Arg.new("b", "a".var)])
     it_parses "def foo(&block); end", Def.new("foo", block_arg: Arg.new("block"), yields: 0)
+    it_parses "def foo(&); end", Def.new("foo", block_arg: Arg.new(""), yields: 0)
+    it_parses "def foo(&\n); end", Def.new("foo", block_arg: Arg.new(""), yields: 0)
     it_parses "def foo(a, &block); end", Def.new("foo", [Arg.new("a")], block_arg: Arg.new("block"), yields: 0)
     it_parses "def foo(a, &block : Int -> Double); end", Def.new("foo", [Arg.new("a")], block_arg: Arg.new("block", restriction: ProcNotation.new(["Int".path] of ASTNode, "Double".path)), yields: 1)
+    it_parses "def foo(a, & : Int -> Double); end", Def.new("foo", [Arg.new("a")], block_arg: Arg.new("", restriction: ProcNotation.new(["Int".path] of ASTNode, "Double".path)), yields: 1)
     it_parses "def foo(a, &block : Int, Float -> Double); end", Def.new("foo", [Arg.new("a")], block_arg: Arg.new("block", restriction: ProcNotation.new(["Int".path, "Float".path] of ASTNode, "Double".path)), yields: 2)
     it_parses "def foo(a, &block : Int, self -> Double); end", Def.new("foo", [Arg.new("a")], block_arg: Arg.new("block", restriction: ProcNotation.new(["Int".path, Self.new] of ASTNode, "Double".path)), yields: 2)
     it_parses "def foo(a, &block : -> Double); end", Def.new("foo", [Arg.new("a")], block_arg: Arg.new("block", restriction: ProcNotation.new(nil, "Double".path)), yields: 0)
@@ -1594,6 +1597,9 @@ module Crystal
 
     assert_syntax_error "def f end", "unexpected token: end (expected ';' or newline)"
 
+    assert_syntax_error "fun foo\nclass", "can't define class inside fun"
+    assert_syntax_error "fun foo\nFoo = 1", "dynamic constant assignment"
+
     assert_syntax_error %([\n"foo"\n"bar"\n])
     it_parses "[\n1\n]", ArrayLiteral.new([1.int32] of ASTNode)
     it_parses "[\n1,2\n]", ArrayLiteral.new([1.int32, 2.int32] of ASTNode)
@@ -1882,6 +1888,28 @@ module Crystal
         node = parser.parse.as(Def).body
         loc = node.location.not_nil!
         loc.line_number.should eq(2)
+      end
+
+      it "sets location of +=" do
+        parser = Parser.new("a = 1; a += 2")
+        node = parser.parse.as(Expressions).expressions[1]
+
+        node.name_location.should_not be_nil
+        name_location = node.name_location.not_nil!
+
+        name_location.line_number.should eq(1)
+        name_location.column_number.should eq(10)
+      end
+
+      it "sets location of obj.x += as call" do
+        parser = Parser.new("a = 1; a.x += 2")
+        node = parser.parse.as(Expressions).expressions[1]
+
+        node.name_location.should_not be_nil
+        name_location = node.name_location.not_nil!
+
+        name_location.line_number.should eq(1)
+        name_location.column_number.should eq(12)
       end
     end
   end

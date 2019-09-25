@@ -13,6 +13,8 @@ module Crystal
   MALLOC_ATOMIC_NAME  = "__crystal_malloc_atomic64"
   REALLOC_NAME        = "__crystal_realloc64"
   GET_EXCEPTION_NAME  = "__crystal_get_exception"
+  ONCE_INIT           = "__crystal_once_init"
+  ONCE                = "__crystal_once"
 
   class Program
     def run(code, filename = nil, debug = Debug::Default)
@@ -97,7 +99,7 @@ module Crystal
     end
 
     def instance_offset_of(type, element_index)
-      llvm_typer.offset_of(llvm_typer.llvm_struct_type(type), element_index)
+      llvm_typer.offset_of(llvm_typer.llvm_struct_type(type), element_index + 1)
     end
   end
 
@@ -243,11 +245,12 @@ module Crystal
 
       initialize_argv_and_argc
 
-      initialize_simple_class_vars_and_constants
-
-      if @debug.line_numbers? && (filename = @program.filename)
-        set_current_debug_location Location.new(filename, 1, 1)
+      if @debug.line_numbers?
+        set_current_debug_location Location.new(@program.filename || "(no name)", 1, 1)
       end
+
+      once_init
+      initialize_simple_constants
 
       alloca_vars @program.vars, @program
 
@@ -261,39 +264,15 @@ module Crystal
       wrap_builder(llvm_context.new_builder)
     end
 
-    # Here we only initialize simple constants and class variables, those
+    # Here we only initialize simple constants, those
     # that has simple values like 1, "foo" and other literals.
-    def initialize_simple_class_vars_and_constants
-      @program.class_var_and_const_initializers.each do |initializer|
-        case initializer
-        when Const
-          # Simple constants are never initialized: they are always inlined
-          next if initializer.compile_time_value
-          next unless initializer.simple?
+    def initialize_simple_constants
+      @program.const_initializers.each do |initializer|
+        # Simple constants are never initialized: they are always inlined
+        next if initializer.compile_time_value
+        next unless initializer.simple?
 
-          initialize_simple_const(initializer)
-        when ClassVarInitializer
-          next unless initializer.node.simple_literal?
-
-          owner = initializer.owner
-          class_var = owner.class_vars[initializer.name]
-          next if class_var.thread_local?
-
-          initialize_simple_class_var(owner, class_var, initializer)
-          owner.all_subclasses.each do |subclass|
-            if subclass.is_a?(ClassVarContainer)
-              initialize_simple_class_var(subclass, class_var, initializer)
-            end
-          end
-
-          if owner.responds_to?(:raw_including_types) && (including_types = owner.raw_including_types)
-            including_types.each do |type|
-              if type.is_a?(ClassVarContainer)
-                initialize_simple_class_var(type, class_var, initializer)
-              end
-            end
-          end
-        end
+        initialize_simple_const(initializer)
       end
     end
 
@@ -325,7 +304,9 @@ module Crystal
 
       def visit(node : FunDef)
         case node.name
-        when MALLOC_NAME, MALLOC_ATOMIC_NAME, REALLOC_NAME, RAISE_NAME, @codegen.personality_name, GET_EXCEPTION_NAME, RAISE_OVERFLOW_NAME
+        when MALLOC_NAME, MALLOC_ATOMIC_NAME, REALLOC_NAME, RAISE_NAME,
+             @codegen.personality_name, GET_EXCEPTION_NAME, RAISE_OVERFLOW_NAME,
+             ONCE_INIT, ONCE
           @codegen.accept node
         end
         false
@@ -527,7 +508,7 @@ module Crystal
                 if node_exp.var.initializer
                   initialize_class_var(node_exp)
                 end
-                get_global class_var_global_name(node_exp.var.owner, node_exp.var.name), node_exp.type, node_exp.var
+                get_global class_var_global_name(node_exp.var), node_exp.type, node_exp.var
               when Global
                 get_global node_exp.name, node_exp.type, node_exp.var
               when Path
@@ -964,12 +945,8 @@ module Crystal
       # or a class variable initializer
       unless target_type
         if target.is_a?(ClassVar)
-          class_var = target.var.initializer.try(&.owner.lookup_class_var(target.name))
-
-          if !class_var || class_var.thread_local? || !value.simple_literal?
-            # This is the case of a class var initializer
-            initialize_class_var(target)
-          end
+          # This is the case of a class var initializer
+          initialize_class_var(target)
         end
         return false
       end

@@ -99,10 +99,6 @@ describe "URI" do
     assert_uri("http://example.com//foo", scheme: "http", host: "example.com", path: "//foo")
     assert_uri("///foo", host: "", path: "/foo")
 
-    pending "path with escape" do
-      assert_uri("http://www.example.com/file%20one%26two", scheme: "http", host: "example.com", path: "/file one&two", raw_path: "/file%20one%26two")
-    end
-
     # query
     assert_uri("http://www.example.com/foo?q=1", scheme: "http", host: "www.example.com", path: "/foo", query: "q=1")
     assert_uri("http://www.example.com/foo?", scheme: "http", host: "www.example.com", path: "/foo", query: "")
@@ -180,13 +176,13 @@ describe "URI" do
     end
   end
 
-  describe "hostname" do
+  describe "#hostname" do
     it { URI.new("http", "www.example.com", path: "/foo").hostname.should eq("www.example.com") }
     it { URI.new("http", "[::1]", path: "foo").hostname.should eq("::1") }
     it { URI.new(path: "/foo").hostname.should be_nil }
   end
 
-  describe "full_path" do
+  describe "#full_path" do
     it { URI.new(path: "/foo").full_path.should eq("/foo") }
     it { URI.new.full_path.should eq("/") }
     it { URI.new(path: "/foo", query: "q=1").full_path.should eq("/foo?q=1") }
@@ -261,28 +257,31 @@ describe "URI" do
     end
   end
 
-  it "#normalize!" do
-    uri = URI.parse("HTTP://example.COM:80/./foo/../bar/")
-    uri.normalize!
-    uri.should eq URI.parse("http://example.com/bar/")
+  describe "#normalize!" do
+    it "modifies the instance" do
+      uri = URI.parse("HTTP://example.COM:80/./foo/../bar/")
+      uri.normalize!
+      uri.should eq URI.parse("http://example.com/bar/")
+    end
   end
 
-  it "implements ==" do
-    URI.parse("http://example.com").should eq(URI.parse("http://example.com"))
+  describe "#opaque?" do
+    it { URI.new.opaque?.should be_false }
+    it { URI.new("foo").opaque?.should be_true }
+    it { URI.new("foo", "example.com").opaque?.should be_false }
+    it { URI.new("foo", "").opaque?.should be_false }
+    it { URI.new("foo", path: "foo").opaque?.should be_true }
+    it { URI.new("foo", path: "/foo").opaque?.should be_false }
   end
 
-  it "implements hash" do
-    URI.parse("http://example.com").hash.should eq(URI.parse("http://example.com").hash)
-  end
-
-  describe "userinfo" do
+  describe "#userinfo" do
     it { URI.parse("http://www.example.com").userinfo.should be_nil }
     it { URI.parse("http://foo@www.example.com").userinfo.should eq("foo") }
     it { URI.parse("http://foo:bar@www.example.com").userinfo.should eq("foo:bar") }
     it { URI.new(user: "ä /", password: "ö :").userinfo.should eq("%C3%A4+%2F:%C3%B6+%3A") }
   end
 
-  describe "to_s" do
+  describe "#to_s" do
     it { URI.new("http", "www.example.com").to_s.should eq("http://www.example.com") }
     it { URI.new("http", "www.example.com", 80).to_s.should eq("http://www.example.com:80") }
     it { URI.new("http", "www.example.com", user: "alice").to_s.should eq("http://alice@www.example.com") }
@@ -319,13 +318,32 @@ describe "URI" do
     end
   end
 
-  it "#opaque?" do
-    URI.new.opaque?.should be_false
-    URI.new("foo").opaque?.should be_true
-    URI.new("foo", "example.com").opaque?.should be_false
-    URI.new("foo", "").opaque?.should be_false
-    URI.new("foo", path: "foo").opaque?.should be_true
-    URI.new("foo", path: "/foo").opaque?.should be_false
+  describe "#query_params" do
+    context "when there is no query parameters" do
+      it "returns an empty instance of HTTP::Params" do
+        uri = URI.parse("http://foo.com")
+        uri.query_params.should be_a(HTTP::Params)
+        uri.query_params.should eq(HTTP::Params.new)
+      end
+    end
+
+    it "returns a HTTP::Params instance based on the query parameters" do
+      expected_params = HTTP::Params{"id" => "30", "limit" => "5"}
+
+      uri = URI.parse("http://foo.com?id=30&limit=5#time=1305298413")
+      uri.query_params.should eq(expected_params)
+
+      uri = URI.parse("?id=30&limit=5#time=1305298413")
+      uri.query_params.should eq(expected_params)
+    end
+  end
+
+  describe "#==" do
+    it { URI.parse("http://example.com").should eq(URI.parse("http://example.com")) }
+  end
+
+  describe "#hash" do
+    it { URI.parse("http://example.com").hash.should eq(URI.parse("http://example.com").hash) }
   end
 
   describe ".default_port" do

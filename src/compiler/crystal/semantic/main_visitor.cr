@@ -202,7 +202,7 @@ module Crystal
           type.visitor = self
           type.used = true
 
-          program.class_var_and_const_initializers << type
+          program.const_initializers << type
         end
 
         node.target_const = type
@@ -2659,6 +2659,7 @@ module Crystal
       if node_name = node.name
         var = @vars[node_name] = new_meta_var(node_name)
         meta_var = (@meta_vars[node_name] ||= new_meta_var(node_name))
+        check_closured(meta_var)
         meta_var.bind_to(var)
         meta_var.assigned_to = true
 
