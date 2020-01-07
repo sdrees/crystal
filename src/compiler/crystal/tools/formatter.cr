@@ -472,7 +472,11 @@ module Crystal
       while true
         case @token.type
         when :STRING
-          write @token.raw
+          if @token.invalid_escape
+            write @token.value
+          else
+            write @token.raw
+          end
           next_string_token
         when :INTERPOLATION_START
           # This is the case of #{__DIR__}
@@ -583,7 +587,11 @@ module Crystal
             write "}"
             @token.delimiter_state = delimiter_state
           else
-            write @token.raw
+            if @token.invalid_escape
+              write @token.value
+            else
+              write @token.raw
+            end
           end
           next_string_token
         else
@@ -2231,8 +2239,7 @@ module Crystal
       end
 
       # This is the case of an enum member
-      # TODO: remove comma support after 0.28.0
-      if @token.type == :";" || (node.name[0]?.try(&.ascii_uppercase?) && @token.type == :",")
+      if @token.type == :";"
         next_token
         @lexer.skip_space
         if @token.type == :COMMENT
