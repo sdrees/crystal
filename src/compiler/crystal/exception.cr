@@ -112,6 +112,8 @@ module Crystal
         if File.file?(filename)
           return format_error_from_file(filename)
         end
+      else
+        # go on
       end
 
       return format_error(source) if source
@@ -126,7 +128,7 @@ module Crystal
       size ||= 0
       io << '\n'
       io << (" " * (offset + column_number - 1))
-      Colorize.with.green.bold.surround(io) do
+      with_color.green.bold.surround(io) do
         io << '^'
         if size > 0
           io << ("-" * (size - 1))
@@ -207,12 +209,16 @@ module Crystal
 
     def source_lines(filename)
       case filename
+      when Nil
+        nil
       when String
         if File.file? filename
-          source_lines = File.read_lines(filename)
+          File.read_lines(filename)
+        else
+          nil
         end
       when VirtualFile
-        source_lines = filename.source.lines
+        filename.source.lines
       end
     end
 
