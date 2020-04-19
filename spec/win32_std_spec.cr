@@ -22,7 +22,6 @@ require "./std/class_spec.cr"
 require "./std/colorize_spec.cr"
 require "./std/comparable_spec.cr"
 require "./std/complex_spec.cr"
-require "./std/concurrent/future_spec.cr"
 # require "./std/concurrent/select_spec.cr" (failed to run)
 require "./std/concurrent_spec.cr"
 # require "./std/crc32_spec.cr" (failed linking)
@@ -49,7 +48,7 @@ require "./std/enumerable_spec.cr"
 require "./std/enum_spec.cr"
 require "./std/env_spec.cr"
 require "./std/exception_spec.cr"
-# require "./std/file_spec.cr" (failed codegen)
+require "./std/file_spec.cr"
 # require "./std/file/tempfile_spec.cr" (failed codegen)
 # require "./std/file_utils_spec.cr" (failed codegen)
 # require "./std/flate/flate_spec.cr" (failed linking)
@@ -152,7 +151,7 @@ require "./std/path_spec.cr"
 require "./std/pointer_spec.cr"
 require "./std/pp_spec.cr"
 require "./std/pretty_print_spec.cr"
-# require "./std/process_spec.cr" (failed codegen)
+require "./std/process_spec.cr"
 require "./std/proc_spec.cr"
 require "./std/raise_spec.cr"
 require "./std/random/isaac_spec.cr"

@@ -78,7 +78,7 @@ module Crystal::System::FileDescriptor
   end
 
   private def system_seek(offset, whence : IO::Seek) : Nil
-    seek_value = LibC._lseek(fd, offset, whence)
+    seek_value = LibC._lseeki64(fd, offset, whence)
 
     if seek_value == -1
       raise IO::Error.from_errno "Unable to seek"
@@ -86,7 +86,7 @@ module Crystal::System::FileDescriptor
   end
 
   private def system_pos
-    pos = LibC._lseek(fd, 0, IO::Seek::Current)
+    pos = LibC._lseeki64(fd, 0, IO::Seek::Current)
     raise IO::Error.from_errno "Unable to tell" if pos == -1
     pos
   end
@@ -135,7 +135,7 @@ module Crystal::System::FileDescriptor
 
   def self.pipe(read_blocking, write_blocking)
     pipe_fds = uninitialized StaticArray(LibC::Int, 2)
-    if LibC._pipe(pipe_fds, 8192, LibC::O_BINARY) != 0
+    if LibC._pipe(pipe_fds, 8192, LibC::O_BINARY | LibC::O_NOINHERIT) != 0
       raise IO::Error.from_errno("Could not create pipe")
     end
 

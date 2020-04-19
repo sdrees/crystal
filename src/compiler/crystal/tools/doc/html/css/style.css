@@ -59,7 +59,7 @@ body {
 }
 
 .sidebar .search-box {
-  padding: 8px 9px;
+  padding: 13px 9px;
 }
 
 .sidebar input {
@@ -106,6 +106,24 @@ body {
   text-indent: 2px;
 }
 
+.project-summary {
+  display: inline-block;
+  padding: 9px 15px 30px 30px;
+  text-align: right;
+}
+
+.project-name {
+  font-size: 1.4rem;
+  margin: 0;
+  color: #f4f4f4;
+  font-weight: 600;
+}
+
+.project-version {
+  margin-top: 5px;
+  display: block;
+}
+
 .sidebar ul {
   margin: 0;
   padding: 0;
@@ -146,10 +164,6 @@ body {
 .sidebar .current > a,
 .sidebar a:hover {
   color: #866BA6;
-}
-
-.repository-links {
-  padding: 5px 15px 5px 30px;
 }
 
 .types-list li ul {
