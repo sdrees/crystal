@@ -62,9 +62,7 @@ class Process
   end
 
   # Returns a `Tms` for the current process. For the children times, only those
-  # of terminated children are returned.
-  #
-  # Available only on Unix-like operating systems.
+  # of terminated children are returned on Unix; they are zero on Windows.
   def self.times : Tms
     Crystal::System::Process.times
   end
@@ -230,6 +228,10 @@ class Process
     fork_input.close unless fork_input == input || fork_input == STDIN
     fork_output.close unless fork_output == output || fork_output == STDOUT
     fork_error.close unless fork_error == error || fork_error == STDERR
+  end
+
+  def finalize
+    @process_info.release
   end
 
   private def stdio_to_fd(stdio : Stdio, for dst_io : IO::FileDescriptor) : IO::FileDescriptor
