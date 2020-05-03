@@ -14,7 +14,7 @@ require "./lib_unwind"
     fun _dyld_get_image_name(image_index : UInt32) : Char*
     fun _dyld_get_image_vmaddr_slide(image_index : UInt32) : Long
   end
-{% elsif flag?(:freebsd) || flag?(:linux) || flag?(:openbsd) %}
+{% elsif flag?(:bsd) || flag?(:linux) %}
   require "crystal/elf"
   require "crystal/dwarf"
 {% end %}
@@ -27,14 +27,6 @@ end
 
 # :nodoc:
 struct Exception::CallStack
-  # Compute current directory at the beginning so filenames
-  # are always shown relative to the *starting* working directory.
-  CURRENT_DIR = begin
-    dir = Process::INITIAL_PWD
-    dir += File::SEPARATOR unless dir.ends_with?(File::SEPARATOR)
-    dir
-  end
-
   @@skip = [] of String
 
   def self.skip(filename)
@@ -168,7 +160,7 @@ struct Exception::CallStack
         next if @@skip.includes?(file)
 
         # Turn to relative to the current dir, if possible
-        file = file.lchop(CURRENT_DIR)
+        file = Path.new(file).relative_to(Process::INITIAL_PWD)
 
         file_line_column = "#{file}:#{line}:#{column}"
       end
@@ -205,7 +197,7 @@ struct Exception::CallStack
     end
   end
 
-  {% if flag?(:darwin) || flag?(:freebsd) || flag?(:linux) || flag?(:openbsd) %}
+  {% if flag?(:darwin) || flag?(:bsd) || flag?(:linux) %}
     @@dwarf_line_numbers : Crystal::DWARF::LineNumbers?
     @@dwarf_function_names : Array(Tuple(LibC::SizeT, LibC::SizeT, String))?
 
