@@ -12,10 +12,17 @@
 # Log.info { "Program started" }
 # ```
 #
+# Data can be associated with a log entry via the `Log::Emitter` yielded in the logging methods.
+#
+# ```
+# Log.info &.emit("User logged in", user_id: 42)
+# ```
+#
 # If you want to log an exception, you can indicate it in the `exception:` named argument.
 #
 # ```
 # Log.warn(exception: e) { "Oh no!" }
+# Log.warn exception: e, &.emit("Oh no!", user_id: 42)
 # ```
 #
 # The block is only evaluated if the current message is to be emitted to some `Log::Backend`.
@@ -101,7 +108,7 @@
 # Log.setup |c|
 #   backend = Log::IOBackend.new
 #
-#   c.bind "*", :warning, backend
+#   c.bind "*", :warn, backend
 #   c.bind "db.*", :debug, backend
 #   c.bind "*", :error, ElasticSearchBackend.new("http://localhost:9200")
 # end
@@ -138,8 +145,9 @@ end
 require "./log/backend"
 require "./log/broadcast_backend"
 require "./log/builder"
-require "./log/context"
+require "./log/metadata"
 require "./log/entry"
+require "./log/format"
 require "./log/main"
 require "./log/setup"
 require "./log/log"
