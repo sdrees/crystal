@@ -3165,6 +3165,7 @@ module Crystal
 
     def visit(node : Unreachable)
       node.type = @program.no_return
+      @unreachable = true
     end
 
     # # Helpers
@@ -3211,6 +3212,8 @@ module Crystal
     end
 
     def check_self_closured
+      return if @typeof_nest > 0
+
       scope = @scope
       return unless scope
 
