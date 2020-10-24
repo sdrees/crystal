@@ -277,6 +277,7 @@ describe Crystal::Formatter do
   assert_format "foo 1,\n2", "foo 1,\n  2"
   assert_format "foo 1, a: 1,\nb: 2,\nc: 3", "foo 1, a: 1,\n  b: 2,\n  c: 3"
   assert_format "foo 1,\na: 1,\nb: 2,\nc: 3", "foo 1,\n  a: 1,\n  b: 2,\n  c: 3"
+  assert_format "foo bar:baz, qux:other", "foo bar: baz, qux: other"
   assert_format "foo(\n  1, 2, &block)", "foo(\n  1, 2, &block)"
   assert_format "foo(\n  1, 2,\n&block)", "foo(\n  1, 2,\n  &block)"
   assert_format "foo(\n  1,\n  2\n) do\n  1\nend"
@@ -1726,5 +1727,18 @@ describe Crystal::Formatter do
 
     def bar
     end
+    CODE
+
+  assert_format <<-CODE
+    foo 1, # comment
+      do
+      end
+    CODE
+
+  assert_format <<-CODE
+    foo 1, # comment
+      # bar
+      do
+      end
     CODE
 end
