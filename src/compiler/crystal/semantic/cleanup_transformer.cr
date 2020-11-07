@@ -393,7 +393,7 @@ module Crystal
         end
       end
 
-      # Check if the block has its type freezed and it doesn't match the current type
+      # Check if the block has its type frozen and it doesn't match the current type
       if block && (freeze_type = block.freeze_type) && (block_type = block.type?)
         unless block_type.implements?(freeze_type)
           freeze_type = freeze_type.base_type if freeze_type.is_a?(VirtualType)
@@ -538,8 +538,6 @@ module Crystal
         if owner.passed_as_self?
           arg.raise "#{message} (closured vars: self)"
         end
-      else
-        # nothing to do
       end
     end
 

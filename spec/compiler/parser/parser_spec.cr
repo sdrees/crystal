@@ -1792,6 +1792,30 @@ module Crystal
     it_parses "{[] of Foo, ::foo}", TupleLiteral.new([ArrayLiteral.new([] of ASTNode, "Foo".path), Call.new(nil, "foo", global: true)] of ASTNode)
     it_parses "{[] of Foo, self.foo}", TupleLiteral.new([ArrayLiteral.new([] of ASTNode, "Foo".path), Call.new("self".var, "foo")] of ASTNode)
 
+    it_parses <<-'CR', Macro.new("foo", body: Expressions.new([MacroLiteral.new("  <<-FOO\n    \#{ "), MacroVar.new("var"), MacroLiteral.new(" }\n  FOO\n")] of ASTNode))
+      macro foo
+        <<-FOO
+          #{ %var }
+        FOO
+      end
+      CR
+
+    it_parses <<-'CR', Macro.new("foo", body: MacroLiteral.new("  <<-FOO, <<-BAR + \"\"\n  FOO\n  BAR\n"))
+      macro foo
+        <<-FOO, <<-BAR + ""
+        FOO
+        BAR
+      end
+      CR
+
+    it_parses <<-'CR', Macro.new("foo", body: MacroLiteral.new("  <<-FOO\n    %foo\n  FOO\n"))
+      macro foo
+        <<-FOO
+          %foo
+        FOO
+      end
+      CR
+
     describe "end locations" do
       assert_end_location "nil"
       assert_end_location "false"
@@ -1939,6 +1963,14 @@ module Crystal
         end_loc.column_number.should eq(3)
       end
 
+      it "gets corrects end location for var + var" do
+        parser = Parser.new("foo = 1\nfoo + nfoo; 1")
+        node = parser.parse.as(Expressions).expressions[1].as(Call).obj.as(Var)
+        end_loc = node.end_location.not_nil!
+        end_loc.line_number.should eq(2)
+        end_loc.column_number.should eq(3)
+      end
+
       it "gets corrects end location for block with { ... }" do
         parser = Parser.new("foo { 1 + 2 }; 1")
         node = parser.parse.as(Expressions).expressions[0].as(Call)
@@ -2028,6 +2060,21 @@ module Crystal
         parser = Parser.new("def foo; yield 1; {% begin %} yield 1 {% end %}; end")
         a_def = parser.parse.as(Def)
         a_def.yields.should eq(1)
+      end
+
+      it "correctly computes line number after `\\{%\n` (#9857)" do
+        code = <<-CODE
+        macro foo
+          \\{%
+            1
+          %}
+        end
+
+        1
+        CODE
+
+        exps = Parser.parse(code).as(Expressions)
+        exps.expressions[1].location.not_nil!.line_number.should eq(7)
       end
     end
   end
