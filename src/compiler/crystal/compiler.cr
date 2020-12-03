@@ -1,7 +1,7 @@
 require "option_parser"
 require "file_utils"
 require "colorize"
-require "digest/md5"
+require "crystal/digest/md5"
 
 module Crystal
   @[Flags]
@@ -202,6 +202,7 @@ module Crystal
 
     private def new_program(sources)
       @program = program = Program.new
+      program.compiler = self
       program.filename = sources.first.filename
       program.cache_dir = CacheDir.instance.directory_for(sources)
       program.codegen_target = codegen_target
@@ -625,7 +626,7 @@ module Crystal
 
         if @name.size > 50
           # 17 chars from name + 1 (dash) + 32 (md5) = 50
-          @name = "#{@name[0..16]}-#{Digest::MD5.hexdigest(@name)}"
+          @name = "#{@name[0..16]}-#{::Crystal::Digest::MD5.hexdigest(@name)}"
         end
 
         @object_extension = program.object_extension

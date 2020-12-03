@@ -1215,6 +1215,7 @@ class Hash(K, V)
   # h.delete_if { |key, value| key.starts_with?("fo") }
   # h # => { "bar" => "qux" }
   # ```
+  @[Deprecated("Use `#reject!` instead")]
   def delete_if
     keys_to_delete = [] of K
     each do |key, value|
@@ -1399,7 +1400,7 @@ class Hash(K, V)
     hash
   end
 
-  def merge(other : Hash(L, W), &block : K, V, W -> V | W) forall L, W
+  def merge(other : Hash(L, W), &block : L, V, W -> V | W) forall L, W
     hash = Hash(K | L, V | W).new
     hash.merge! self
     hash.merge!(other) { |k, v1, v2| yield k, v1, v2 }
@@ -1451,7 +1452,7 @@ class Hash(K, V)
     reject { |k, v| !yield(k, v) }
   end
 
-  # Equivalent to `Hash#select` but makes modification on the current object rather that returning a new one. Returns `nil` if no changes were made
+  # Equivalent to `Hash#select` but makes modification on the current object rather than returning a new one. Returns `self`.
   def select!(&block : K, V -> _)
     reject! { |k, v| !yield(k, v) }
   end
@@ -1468,13 +1469,12 @@ class Hash(K, V)
     end
   end
 
-  # Equivalent to `Hash#reject`, but makes modification on the current object rather that returning a new one. Returns `nil` if no changes were made.
+  # Equivalent to `Hash#reject`, but makes modification on the current object rather than returning a new one. Returns `self`.
   def reject!(&block : K, V -> _)
-    num_entries = size
     each do |key, value|
       delete(key) if yield(key, value)
     end
-    num_entries == size ? nil : self
+    self
   end
 
   # Returns a new `Hash` without the given keys.
@@ -1551,7 +1551,7 @@ class Hash(K, V)
     end
   end
 
-  # Removes all `nil` value from `self`. Returns `nil` if no changes were made.
+  # Removes all `nil` value from `self`. Returns `self`.
   #
   # ```
   # hash = {"hello" => "world", "foo" => nil}
@@ -1801,9 +1801,18 @@ class Hash(K, V)
   # hash_a # => {"foobar" => {"foo" => "bar"}}
   # ```
   def clone
-    hash = self.class.new
-    hash.initialize_clone(self)
-    hash
+    {% if V == ::Bool || V == ::Char || V == ::String || V == ::Symbol || V < ::Number::Primitive %}
+      clone = self.class.new
+      clone.initialize_clone(self)
+      clone
+    {% else %}
+      exec_recursive_clone do |hash|
+        clone = self.class.new
+        hash[object_id] = clone.object_id
+        clone.initialize_clone(self)
+        clone
+      end
+    {% end %}
   end
 
   def inspect(io : IO) : Nil

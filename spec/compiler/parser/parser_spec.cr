@@ -1081,6 +1081,8 @@ module Crystal
     it_parses %({"foo": 1, "bar": 2}), NamedTupleLiteral.new([NamedTupleLiteral::Entry.new("foo", 1.int32), NamedTupleLiteral::Entry.new("bar", 2.int32)])
 
     assert_syntax_error "{a: 1, a: 2}", "duplicated key: a"
+    assert_syntax_error "{a[0]: 1}", "expecting token '=>', not ':'"
+    assert_syntax_error "{a[]: 1}", "expecting token '=>', not ':'"
 
     it_parses "{} of Int => Double", HashLiteral.new([] of HashLiteral::Entry, of: HashLiteral::Entry.new("Int".path, "Double".path))
     it_parses "{} of Int32 -> Int32 => Int32", HashLiteral.new([] of HashLiteral::Entry, of: HashLiteral::Entry.new(ProcNotation.new(["Int32".path] of ASTNode, "Int32".path), "Int32".path))
@@ -1564,9 +1566,13 @@ module Crystal
     it_parses "foo.Bar", Call.new("foo".call, "Bar")
 
     [{'(', ')'}, {'[', ']'}, {'<', '>'}, {'{', '}'}, {'|', '|'}].each do |open, close|
-      it_parses "{% begin %}%r#{open}\\A#{close}{% end %}", MacroIf.new(true.bool, MacroLiteral.new("%r#{open}\\A#{close}"))
       it_parses "{% begin %}%#{open} %s #{close}{% end %}", MacroIf.new(true.bool, MacroLiteral.new("%#{open} %s #{close}"))
       it_parses "{% begin %}%q#{open} %s #{close}{% end %}", MacroIf.new(true.bool, MacroLiteral.new("%q#{open} %s #{close}"))
+      it_parses "{% begin %}%Q#{open} %s #{close}{% end %}", MacroIf.new(true.bool, MacroLiteral.new("%Q#{open} %s #{close}"))
+      it_parses "{% begin %}%i#{open} %s #{close}{% end %}", MacroIf.new(true.bool, MacroLiteral.new("%i#{open} %s #{close}"))
+      it_parses "{% begin %}%w#{open} %s #{close}{% end %}", MacroIf.new(true.bool, MacroLiteral.new("%w#{open} %s #{close}"))
+      it_parses "{% begin %}%x#{open} %s #{close}{% end %}", MacroIf.new(true.bool, MacroLiteral.new("%x#{open} %s #{close}"))
+      it_parses "{% begin %}%r#{open}\\A#{close}{% end %}", MacroIf.new(true.bool, MacroLiteral.new("%r#{open}\\A#{close}"))
     end
 
     it_parses %(foo(bar:"a", baz:"b")), Call.new(nil, "foo", named_args: [NamedArgument.new("bar", "a".string), NamedArgument.new("baz", "b".string)])
